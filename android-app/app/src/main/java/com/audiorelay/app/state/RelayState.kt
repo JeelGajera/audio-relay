@@ -68,6 +68,20 @@ object RelayState {
     private val _pairedLaptops = MutableStateFlow<List<PairedLaptop>>(emptyList())
     val pairedLaptops: StateFlow<List<PairedLaptop>> = _pairedLaptops.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    private val _dynamicColor = MutableStateFlow(true)
+    val dynamicColor: StateFlow<Boolean> = _dynamicColor.asStateFlow()
+
+    /**
+     * Playback level, 0.0..=1.0, for the Home screen's visualiser. Updated
+     * from the playback loop, so it reflects what is actually reaching the
+     * speaker rather than merely what arrived on the socket.
+     */
+    private val _playbackLevel = MutableStateFlow(0f)
+    val playbackLevel: StateFlow<Float> = _playbackLevel.asStateFlow()
+
     fun setStatus(status: ConnectionStatus) {
         _status.value = status
     }
@@ -98,6 +112,18 @@ object RelayState {
 
     fun setPairedLaptops(laptops: List<PairedLaptop>) {
         _pairedLaptops.value = laptops
+    }
+
+    fun setThemeMode(mode: ThemeMode) {
+        _themeMode.value = mode
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        _dynamicColor.value = enabled
+    }
+
+    fun setPlaybackLevel(level: Float) {
+        _playbackLevel.value = level.coerceIn(0f, 1f)
     }
 }
 
