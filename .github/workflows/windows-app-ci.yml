@@ -2,7 +2,7 @@ name: windows-app CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "windows-app/**"
       - "protocol-spec.md"
@@ -12,6 +12,15 @@ on:
       - "windows-app/**"
       - "protocol-spec.md"
       - ".github/workflows/windows-app-ci.yml"
+  workflow_dispatch:
+
+# Superseded runs on the same branch are pointless once a newer commit exists.
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -50,3 +59,12 @@ jobs:
         run: cargo build --release
       - name: test
         run: cargo test
+      # Keep the binary this job already built, so a reviewer can try a change
+      # without a Rust toolchain. Not a release artifact — see release.yml.
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-relay-windows-x86_64-${{ github.sha }}
+          path: windows-app/target/release/audio-relay.exe
+          if-no-files-found: error
+          retention-days: 14

@@ -2,7 +2,7 @@ name: android-app CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "android-app/**"
       - "protocol-spec.md"
@@ -12,6 +12,14 @@ on:
       - "android-app/**"
       - "protocol-spec.md"
       - ".github/workflows/android-app-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-app-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 defaults:
   run:
@@ -33,3 +41,25 @@ jobs:
         run: ./gradlew testDebugUnitTest
       - name: Assemble debug APK
         run: ./gradlew assembleDebug
+      # Proves the release variant builds — minification and resource shrinking
+      # only run here, so without this a release-only break would surface for
+      # the first time during an actual release.
+      - name: Assemble release APK
+        run: ./gradlew assembleRelease
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-relay-debug-${{ github.sha }}
+          path: android-app/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+      # Test reports are the only way to see which assertions ran when a
+      # remote build fails, so keep them even on failure.
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-report-${{ github.sha }}
+          path: android-app/app/build/reports/tests/
+          if-no-files-found: ignore
+          retention-days: 14
