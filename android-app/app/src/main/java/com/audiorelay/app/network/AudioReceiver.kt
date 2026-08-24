@@ -53,8 +53,13 @@ class AudioReceiver {
         this.sessionId = sessionId
         // ~10ms chunks, matching the sender's TARGET_CHUNK_MS (windows-app/src/capture/mod.rs).
         val bytesPerSample = 2 // 16-bit PCM
-        val chunkSizeBytes = sampleRateHz / 100 * channels * bytesPerSample
-        jitterBuffer = JitterBuffer(chunkSizeBytes, targetDepthChunks = jitterTargetDepthChunks)
+        val bytesPerFrame = channels * bytesPerSample
+        val chunkSizeBytes = sampleRateHz / 100 * bytesPerFrame
+        jitterBuffer = JitterBuffer(
+            chunkSizeBytes,
+            targetDepthChunks = jitterTargetDepthChunks,
+            bytesPerFrame = bytesPerFrame,
+        )
         playback = PlaybackTrack(sampleRateHz, channels, preferredOutputDevice).also { it.play() }
     }
 
@@ -90,7 +95,9 @@ class AudioReceiver {
                     ciphertextOffset = header.payloadStart,
                     ciphertextLength = packet.length - header.payloadStart,
                 )
-                jitterBuffer?.push(header.sequence, pcm)
+                // The timestamp drives clock-drift correction (protocol-spec.md §3,
+                // docs/roadmap.md Phase 5) — see JitterBuffer's class docs.
+                jitterBuffer?.push(header.sequence, pcm, header.timestampMs)
             } catch (e: Crypto.AeadException) {
                 continue // authentication failure — treat exactly like a lost packet
             }
