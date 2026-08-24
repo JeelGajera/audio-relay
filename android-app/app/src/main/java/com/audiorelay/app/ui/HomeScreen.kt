@@ -78,6 +78,8 @@ private fun StatusLine(status: ConnectionStatus, connectedDeviceName: String?) {
         ConnectionStatus.PAIRING_CODE_REQUIRED -> "Enter the pairing code shown on the laptop"
         ConnectionStatus.STREAMING -> "● Streaming from ${connectedDeviceName ?: "laptop"}"
         ConnectionStatus.DISCONNECTED -> "Disconnected — will retry automatically"
+        ConnectionStatus.RECONNECTING -> "Reconnecting…"
+        ConnectionStatus.NETWORK_CHANGED -> "Network changed — looking for the laptop again…"
     }
     Text(text, style = MaterialTheme.typography.bodyLarge)
 }

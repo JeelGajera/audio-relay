@@ -19,6 +19,17 @@ enum class ConnectionStatus {
     PAIRING_CODE_REQUIRED,
     STREAMING,
     DISCONNECTED,
+
+    /** Dropped, and waiting out the reconnect backoff before trying again. */
+    RECONNECTING,
+
+    /**
+     * The device moved to a different network (or lost one), so discovery has
+     * been restarted from scratch. Distinct from [DISCONNECTED] because the
+     * cause and the expected recovery are different — see
+     * `service/RelayService.kt`.
+     */
+    NETWORK_CHANGED,
 }
 
 /**

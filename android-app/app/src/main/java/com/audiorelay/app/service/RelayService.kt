@@ -8,6 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.media.AudioDeviceCallback
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -28,11 +31,15 @@ import com.audiorelay.app.state.PairedLaptop
 import com.audiorelay.app.state.RelayState
 import com.audiorelay.app.state.SettingsStore
 import com.audiorelay.app.ui.MainActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -69,6 +76,26 @@ class RelayService : Service() {
     /** The receiver for the currently active session, if any — lets Settings changes (output device) apply live, without a reconnect. */
     @Volatile private var activeReceiver: AudioReceiver? = null
 
+    // --- reconnect supervision (docs/roadmap.md Phase 4) ---
+
+    /** Last laptop we tried to reach, so a retry knows where to go. */
+    @Volatile private var lastTarget: DiscoveredLaptop? = null
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
+
+    /** Set while we're deliberately tearing a session down, so its `finally` doesn't schedule a retry. */
+    @Volatile private var suppressReconnect = false
+
+    // --- network-change handling (docs/roadmap.md Phase 4) ---
+
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var networkChangeJob: Job? = null
+
+    @Volatile private var activeNetwork: Network? = null
+
+    @Volatile private var lastLinkAddresses: List<String>? = null
+
     override fun onCreate() {
         super.onCreate()
         store = PairedDeviceStore(this)
@@ -91,6 +118,7 @@ class RelayService : Service() {
         deviceChangeCallback = outputDevices.registerChangeCallback { refreshOutputDevices() }
         refreshPairedLaptops()
 
+        registerNetworkCallback()
         startDiscoveryAndAutoConnect()
     }
 
@@ -102,6 +130,10 @@ class RelayService : Service() {
                 val host = intent.getStringExtra(EXTRA_HOST)
                 val port = intent.getIntExtra(EXTRA_PORT, -1)
                 if (deviceId != null && name != null && host != null && port > 0) {
+                    // An explicit user request shouldn't wait behind a backoff
+                    // accumulated by earlier automatic attempts.
+                    reconnectJob?.cancel()
+                    reconnectAttempt = 0
                     connectTo(DiscoveredLaptop(deviceId, name, host, port))
                 }
             }
@@ -126,19 +158,30 @@ class RelayService : Service() {
                 intent.getStringExtra(EXTRA_DEVICE_ID)?.let { store.forgetLaptop(it) }
                 refreshPairedLaptops()
             }
-            ACTION_STOP -> stopSelf()
+            ACTION_STOP -> {
+                suppressReconnect = true
+                reconnectJob?.cancel()
+                stopSelf()
+            }
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        connectJob?.cancel()
+        suppressReconnect = true
+        networkCallback?.let { callback ->
+            runCatching { connectivityManager?.unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
         discovery.stop()
         deviceChangeCallback?.let { outputDevices.unregisterChangeCallback(it) }
         runCatching { if (wakeLock.isHeld) wakeLock.release() }
         runCatching { if (multicastLock.isHeld) multicastLock.release() }
         mediaSession.isActive = false
         mediaSession.release()
+        // Cancels connectJob, reconnectJob and networkChangeJob together —
+        // they're all children of this scope.
+        serviceScope.cancel()
         super.onDestroy()
     }
 
@@ -157,8 +200,13 @@ class RelayService : Service() {
         RelayState.setPairedLaptops(store.listPairedLaptops().map { (id, name) -> PairedLaptop(id, name) })
     }
 
-    private fun startDiscoveryAndAutoConnect() {
-        RelayState.setStatus(ConnectionStatus.DISCOVERING)
+    /**
+     * [status] lets a network-triggered restart keep showing
+     * [ConnectionStatus.NETWORK_CHANGED] until something is actually found,
+     * rather than immediately claiming a normal discovery pass.
+     */
+    private fun startDiscoveryAndAutoConnect(status: ConnectionStatus = ConnectionStatus.DISCOVERING) {
+        RelayState.setStatus(status)
         discovery.start { laptops ->
             RelayState.setDiscoveredLaptops(laptops)
             val lastId = store.lastLaptopDeviceId
@@ -168,9 +216,142 @@ class RelayService : Service() {
         }
     }
 
+    // ---------------------------------------------------------------------
+    // Reconnect supervision
+    // ---------------------------------------------------------------------
+
+    /**
+     * Schedules a retry against [lastTarget] after an exponential backoff.
+     * Called when a session ends on its own — a dropped socket, a missed
+     * heartbeat — as opposed to us tearing it down deliberately.
+     *
+     * Without this, a dropped connection only ever recovered if NSD happened
+     * to re-announce the service, which it has no obligation to do.
+     */
+    private fun scheduleReconnect() {
+        val target = lastTarget ?: return
+        reconnectJob?.cancel()
+        reconnectJob = serviceScope.launch {
+            val delayMs = ReconnectBackoff.delayMsFor(reconnectAttempt)
+            reconnectAttempt++
+            RelayState.setStatus(ConnectionStatus.RECONNECTING)
+            Log.i(TAG, "reconnecting to ${target.name} in ${delayMs}ms (attempt $reconnectAttempt)")
+            delay(delayMs)
+            connectTo(target)
+        }
+    }
+
+    /** Tears down the active session without letting it schedule its own retry. */
+    private suspend fun cancelActiveSession() {
+        suppressReconnect = true
+        try {
+            connectJob?.cancelAndJoin()
+            connectJob = null
+        } finally {
+            suppressReconnect = false
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Network-change handling
+    // ---------------------------------------------------------------------
+
+    /**
+     * Watches the *default* network specifically. That callback fires when
+     * the system switches which network apps use — Wi-Fi to cellular, one
+     * SSID to another, joining a hotspot — which is exactly the event we
+     * care about, and far less chatty than a broad network request that also
+     * reports things like signal-strength changes.
+     */
+    private fun registerNetworkCallback() {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        connectivityManager = manager
+
+        // Seed from the network we're already on. Registering replays
+        // onAvailable for the current default immediately, and without this
+        // seed that replay would look like a switch — restarting discovery
+        // and flashing "network changed" on every single launch.
+        activeNetwork = runCatching { manager.activeNetwork }.getOrNull()
+
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = activeNetwork
+                if (previous == network) return // the startup replay, or a duplicate
+                activeNetwork = network
+                lastLinkAddresses = null
+                onNetworkChanged(
+                    if (previous == null) "a network became available" else "default network switched",
+                )
+            }
+
+            override fun onLost(network: Network) {
+                if (activeNetwork != network) return
+                activeNetwork = null
+                lastLinkAddresses = null
+                onNetworkChanged("network lost")
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                if (network != activeNetwork) return
+                // Catches a DHCP renewal that lands us on a different subnet —
+                // same Network object, but every socket and the mDNS group
+                // membership are now bound to the wrong address.
+                val addresses = linkProperties.linkAddresses
+                    .mapNotNull { it.address?.hostAddress }
+                    .sorted()
+                val previous = lastLinkAddresses
+                lastLinkAddresses = addresses
+                if (previous != null && previous != addresses) {
+                    onNetworkChanged("interface addresses changed")
+                }
+            }
+        }
+
+        networkCallback = callback
+        runCatching { manager.registerDefaultNetworkCallback(callback) }
+            .onFailure {
+                Log.w(TAG, "could not register network callback; falling back to heartbeat-only recovery", it)
+                networkCallback = null
+            }
+    }
+
+    /**
+     * Debounced entry point. Android fires these callbacks in bursts during a
+     * transition (lost, available, link properties, all within a few hundred
+     * milliseconds), and reacting to each one would tear down and rebuild the
+     * connection several times over.
+     */
+    private fun onNetworkChanged(reason: String) {
+        Log.i(TAG, "network change: $reason")
+        networkChangeJob?.cancel()
+        networkChangeJob = serviceScope.launch {
+            delay(NETWORK_CHANGE_DEBOUNCE_MS)
+            applyNetworkChange()
+        }
+    }
+
+    private suspend fun applyNetworkChange() {
+        reconnectJob?.cancel()
+        cancelActiveSession()
+
+        // A new network deserves an immediate attempt rather than inheriting
+        // whatever backoff the previous network's failures had built up.
+        reconnectAttempt = 0
+
+        // NSD's sockets and multicast group membership belong to the old
+        // interface, so discovery has to be torn down and restarted rather
+        // than left running.
+        discovery.stop()
+        RelayState.setDiscoveredLaptops(emptyList())
+        RelayState.setConnectedDeviceName(null)
+        updateNotification(null)
+        startDiscoveryAndAutoConnect(ConnectionStatus.NETWORK_CHANGED)
+    }
+
     /** Also called directly by the UI when the user picks a device from the list. */
     fun connectTo(laptop: DiscoveredLaptop) {
         if (connectJob?.isActive == true) return
+        lastTarget = laptop
         connectJob = serviceScope.launch {
             RelayState.setStatus(ConnectionStatus.CONNECTING)
             var receiver: AudioReceiver? = null
@@ -218,19 +399,37 @@ class RelayService : Service() {
                 RelayState.setStatus(ConnectionStatus.STREAMING)
                 RelayState.setConnectedDeviceName(paired.laptopDeviceName)
                 updateNotification(paired.laptopDeviceName)
+                reconnectAttempt = 0 // a session that actually reached streaming clears the backoff
 
                 launch { sessionReceiver.receiveLoop() }
                 launch { sessionReceiver.playbackLoop() }
                 activeChannel.heartbeatLoop() // suspends until disconnect
+            } catch (e: CancellationException) {
+                // We cancelled this session on purpose (network change,
+                // shutdown). Rethrow so the job completes as cancelled rather
+                // than looking like it finished normally — swallowing this is
+                // what breaks structured concurrency.
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "connection to ${laptop.name} ended: ${e.message}", e)
             } finally {
                 receiver?.close()
                 channel?.close()
                 activeReceiver = null
-                RelayState.setStatus(ConnectionStatus.DISCONNECTED)
+                // Clear pairing state unconditionally: if the session died
+                // while waiting for a code, the prompt would otherwise stay on
+                // screen forever with nothing behind it.
+                pendingPairingCode = null
+                RelayState.setPendingPairingTarget(null)
                 RelayState.setConnectedDeviceName(null)
                 updateNotification(null)
+                // When we cancelled this session ourselves (network change,
+                // shutdown), the caller owns what happens next and has already
+                // set an appropriate status.
+                if (!suppressReconnect) {
+                    RelayState.setStatus(ConnectionStatus.DISCONNECTED)
+                    scheduleReconnect()
+                }
             }
         }
     }
@@ -275,6 +474,12 @@ class RelayService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "audio_relay_streaming"
         private const val NOTIFICATION_ID = 1
         private const val WAKE_LOCK_TIMEOUT_MS = 12 * 60 * 60 * 1000L // 12h safety cap, not an expected session length
+
+        /**
+         * Collapses the burst of callbacks Android emits during a single
+         * network transition into one teardown/restart.
+         */
+        private const val NETWORK_CHANGE_DEBOUNCE_MS = 750L
 
         const val ACTION_CONNECT = "com.audiorelay.app.action.CONNECT"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.audiorelay.app.action.SUBMIT_PAIRING_CODE"

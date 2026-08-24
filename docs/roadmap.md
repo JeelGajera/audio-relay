@@ -35,6 +35,14 @@ touching the Android Gradle Plugin/SDK or actual hardware — WASAPI capture,
 - [ ] Confirm mDNS advertise/browse works over an actual Android hotspot
       (not just a home router) — the topology most likely to have
       surprises.
+- [ ] Confirm the Phase 4 network-change path recovers on a real device:
+      switch Wi-Fi networks mid-stream, and drop to mobile data and back,
+      and check discovery restarts and the session re-establishes. The
+      callback wiring is written against the documented
+      `ConnectivityManager` behaviour but has never run on hardware.
+- [ ] Confirm the Phase 5 drift correction holds over a multi-hour session
+      against two real clocks — latency should stay put rather than creeping,
+      with no audible artefacts from the frame-level corrections.
 
 ## Phase 1 — Minimal end-to-end pipeline (hardcoded IP, no discovery/pairing)
 
@@ -68,13 +76,21 @@ touching the Android Gradle Plugin/SDK or actual hardware — WASAPI capture,
 
 - [x] Heartbeat, reconnect-with-backoff, persisted last-paired device.
 - [x] Foreground service + wake lock + multicast lock on Android.
-- [ ] Network-change handling (`ConnectivityManager` callbacks triggering
-      re-discovery) — basic reconnect-on-heartbeat-timeout is in place;
-      proactive network-change listening is not yet wired up. Good
-      first-issue-sized follow-up.
+- [x] Network-change handling — a `ConnectivityManager` default-network
+      callback tears down the session and restarts NSD discovery when the
+      phone moves between networks (Wi-Fi to hotspot, SSID switch, DHCP
+      renewal onto a new subnet), debounced so one transition causes one
+      restart rather than several. Surfaced to the UI as a distinct
+      `NETWORK_CHANGED` status.
+- [x] Reconnect backoff supervision — a dropped session now schedules its
+      own retry (1s doubling to a 30s ceiling, reset on a successful stream
+      or a network change). Previously reconnection depended on NSD
+      happening to re-announce the service, which it has no obligation to
+      do.
 - **Implemented in:** `windows-app/src/config.rs`,
   `windows-app/src/network/control_channel.rs` (heartbeat),
-  `android-app/.../service/RelayService.kt`.
+  `android-app/.../service/RelayService.kt`,
+  `android-app/.../service/ReconnectBackoff.kt`.
 
 ## Phase 5 — Jitter buffer & latency tuning
 
@@ -82,10 +98,14 @@ touching the Android Gradle Plugin/SDK or actual hardware — WASAPI capture,
 - [x] User-configurable jitter-buffer depth (Android Settings screen —
       `state/SettingsStore.kt`, `ui/SettingsScreen.kt`). Applies on the next
       reconnect, not to an already-running buffer.
-- [ ] Timestamp-based clock-drift correction over long sessions. The
-      timestamp field is in every packet (`protocol-spec.md` §3) but the
-      receiver doesn't yet act on drift — flagged as a known gap in
-      `CHANGELOG.md`.
+- [x] Timestamp-based clock-drift correction over long sessions. The
+      receiver now regulates smoothed buffer depth back to the target by
+      dropping or duplicating a single PCM frame at a time (~21µs, versus
+      the ~10ms click a whole-chunk correction would cause), gated on
+      observed session time from each packet's `timestamp_ms`
+      (`protocol-spec.md` §3), with a deadband and rate limit so ordinary
+      network jitter provokes no correction. Covered by a simulation test
+      suite in `android-app/.../audio/ClockDriftTest.kt`.
 - [x] Low/Balanced latency-mode toggle in the Windows UI (`ui/settings.rs`)
       — changes the capture chunk size (~5ms vs ~10ms) live, no restart.
 

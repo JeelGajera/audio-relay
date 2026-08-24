@@ -25,6 +25,26 @@ tagged release.
 
 ### Added
 
+- **Clock-drift correction** (roadmap Phase 5): the receiver now acts on each
+  packet's `timestamp_ms`. Sender and receiver clocks are never exactly
+  equal, so over a long session the jitter buffer used to leak one way —
+  filling until it dropped a whole chunk, or draining into permanent
+  concealment silence. Buffer depth is now regulated back to the target by
+  dropping or duplicating a single PCM frame at a time (~21µs, inaudible;
+  a whole-chunk correction is the ~10ms click this avoids), with a deadband
+  and rate limit so ordinary network jitter provokes no correction at all.
+- **Network-change handling** (roadmap Phase 4): a `ConnectivityManager`
+  default-network callback tears down the session and restarts NSD discovery
+  when the phone moves between networks — Wi-Fi to hotspot, SSID switch, or a
+  DHCP renewal onto a different subnet — instead of waiting for three
+  heartbeats to time out. Debounced, so one transition causes one restart.
+  Shown in the UI as its own status rather than a generic disconnect.
+- **Reconnect backoff supervision**: a dropped session now schedules its own
+  retry (1s doubling to a 30s ceiling, reset by a successful stream or a
+  network change). Previously reconnection depended entirely on NSD choosing
+  to re-announce the service, which it has no obligation to do — so a dropped
+  connection could simply never recover.
+
 - Project scaffolding: contribution/governance docs (`AGENTS.md`,
   `CLAUDE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`),
   architecture and roadmap docs, CI workflows.
@@ -44,16 +64,27 @@ tagged release.
   with version, build commit/date, GitHub link, and license/third-party
   info on both apps.
 
+### Fixed
+
+- A session that ended while waiting for the user to type a pairing code left
+  the pairing prompt on screen with nothing behind it.
+- `CancellationException` was caught and swallowed alongside real errors in
+  the connection coroutine, so a deliberately cancelled session completed as
+  though it had finished normally.
+
 ### Verified
 
 - `windows-app`: full `cargo test`/`clippy`/`fmt` pass, including a
   cross-implementation known-answer test for the ChaCha20-Poly1305 payload
   encryption.
 - `android-app`: every platform-independent module (`AudioPacket`,
-  `ControlMessage`, `Crypto`, `JitterBuffer`) compiled and unit-tested
-  against the project's actual Kotlin 1.9.24/`kotlinx` toolchain on a plain
-  JVM, including the Android-side half of that same cross-implementation
-  crypto vector — see `docs/roadmap.md` Phase 0 and `android-app/README.md`.
+  `ControlMessage`, `Crypto`, `JitterBuffer`, `ReconnectBackoff`) compiled
+  and unit-tested against the project's actual Kotlin 1.9.24/`kotlinx`
+  toolchain on a plain JVM — 47 tests — including the Android-side half of
+  that same cross-implementation crypto vector, and a discrete-event
+  simulation of a drifting sender that asserts buffer depth converges and
+  that jitter alone does not provoke correction. See `docs/roadmap.md`
+  Phase 0 and `android-app/README.md`.
 
 ### Known gaps
 
@@ -65,7 +96,10 @@ tagged release.
   environment (no route to `dl.google.com`) — everything touching the
   Android framework (`RelayService`, `AudioReceiver`, `PlaybackTrack`,
   `NsdDiscovery`, the UI) is written and reviewed but not compiled here.
-- Clock-drift correction from packet timestamps and the adaptive/tunable
-  jitter-buffer depth (Phase 5) are implemented at a basic level, not fully
-  tuned.
+- Clock-drift correction is validated in simulation, not against two real
+  crystals over a multi-hour session. Its constants (deadband, smoothing,
+  correction rate) are reasoned defaults that on-device testing may want to
+  revisit.
+- Network-change handling cannot be exercised here at all — it needs a real
+  device actually moving between networks.
 - No packaging/release pipeline yet (single portable `.exe`, signed APK).

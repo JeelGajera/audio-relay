@@ -39,14 +39,15 @@ routing to whatever Bluetooth device is already connected.
 | `network/Crypto.kt` | HKDF session-key derivation, repair proof, ChaCha20-Poly1305 payload decryption |
 | `network/ControlChannel.kt` | Pairing handshake + heartbeat client |
 | `network/AudioReceiver.kt` | UDP receive loop → decrypt → jitter buffer → playback loop |
-| `audio/JitterBuffer.kt` | Sequence-aware jitter buffer with silence concealment (pure Kotlin) |
+| `audio/JitterBuffer.kt` | Sequence-aware jitter buffer with silence concealment and clock-drift correction (pure Kotlin) |
 | `audio/PlaybackTrack.kt` | Low-latency `AudioTrack` wrapper (`USAGE_MEDIA`), live output-device switching |
 | `audio/OutputDeviceRepository.kt` | Lists Bluetooth/wired/USB/speaker output routes via `AudioManager` |
 | `discovery/NsdDiscovery.kt` | mDNS browse for `_audiorelay._udp` |
 | `state/PairedDeviceStore.kt` | Persisted device ID + paired laptops (`SharedPreferences`) |
 | `state/SettingsStore.kt` | Persisted preferred output device + jitter-buffer depth |
 | `state/RelayState.kt` | Process-wide observable state shared between the service and the UI |
-| `service/RelayService.kt` | Foreground service wiring everything together, applies settings live |
+| `service/RelayService.kt` | Foreground service wiring everything together, applies settings live, watches for network changes |
+| `service/ReconnectBackoff.kt` | Exponential backoff schedule for automatic reconnects (pure Kotlin) |
 | `ui/AudioRelayApp.kt` | Three-tab app shell (Home / Settings / About) |
 | `ui/HomeScreen.kt` | Status, discovered laptops, pairing-code entry |
 | `ui/SettingsScreen.kt` | Output device picker, jitter-depth slider, paired-laptop management |
@@ -60,9 +61,16 @@ routing to whatever Bluetooth device is already connected.
 ```
 
 Local unit tests (`src/test/`) cover `AudioPacket`, `ControlMessage`,
-`Crypto`, and `JitterBuffer` — all pure Kotlin/JDK code with no Android
-framework dependency, so they run on the plain JVM without Robolectric or a
-device/emulator.
+`Crypto`, `JitterBuffer`, and `ReconnectBackoff` — all pure Kotlin/JDK code
+with no Android framework dependency, so they run on the plain JVM without
+Robolectric or a device/emulator.
+
+`ClockDriftTest` is worth knowing about: it drives the jitter buffer through
+a discrete-event simulation of a real session, with a sender on a
+deliberately wrong clock and a receiver that drains chunks at the rate an
+audio DAC actually would. That second half is what makes it meaningful —
+shortening a chunk really does make the next `pop` happen sooner, so the
+correction's feedback loop is exercised rather than mocked.
 
 **These are the only parts of this app verified in this repository's
 history.** They were compiled and run with the *exact* Kotlin 1.9.24
@@ -94,10 +102,12 @@ verification".
 
 - Jitter-buffer depth is user-configurable now, but changes only apply on
   the next reconnect, not to an already-running buffer — see
-  `JitterBuffer.kt`'s class doc. Clock-drift correction is still not
-  implemented.
-- No `ConnectivityManager` network-change listening yet (relies on the
-  heartbeat timeout to notice a dead connection and retry via mDNS).
+  `JitterBuffer.kt`'s class doc.
+- Clock-drift correction is validated in simulation only. Its constants are
+  reasoned defaults; a multi-hour session against two real crystals may want
+  to revisit them.
+- Network-change handling has never run on a real device moving between
+  networks — see `docs/roadmap.md` Phase 0.
 - Pairing-code UI is a bare dialog, not polished.
 - `OutputDeviceRepository`'s device list only includes types most relevant
   to this app (Bluetooth, wired, USB, phone speaker) — not every
