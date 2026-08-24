@@ -28,6 +28,10 @@ pub struct Config {
     /// Keyed by the phone's device_id.
     #[serde(default)]
     pub paired_devices: HashMap<String, PairedDevice>,
+    /// Light/dark preference. `#[serde(default)]` so config files written by
+    /// earlier versions still load.
+    #[serde(default)]
+    pub appearance: crate::ui::Appearance,
 }
 
 impl Default for Config {
@@ -35,6 +39,7 @@ impl Default for Config {
         Config {
             device_id: Uuid::new_v4().to_string(),
             paired_devices: HashMap::new(),
+            appearance: crate::ui::Appearance::default(),
         }
     }
 }

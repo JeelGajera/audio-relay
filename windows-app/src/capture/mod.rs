@@ -67,9 +67,43 @@ pub fn start_capture(
     }
 }
 
+/// Loudness of one chunk as a 0.0..=1.0 meter reading.
+///
+/// Not raw RMS: a linear bar sits almost at the floor for ordinary listening
+/// levels, because loudness is perceived logarithmically. This maps
+/// -60dBFS..0dBFS onto the full bar, which is the range a level meter is
+/// actually useful over.
+///
+/// Lives outside the `cfg(windows)` capture implementation so it can be
+/// tested on any platform — which is also why it needs a `dead_code` allow
+/// there: only the Windows capture loop calls it outside of tests.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn rms_level(pcm: &[u8]) -> f32 {
+    let mut sum_squares = 0.0f64;
+    let mut samples = 0u32;
+    // as_chunks discards a trailing odd byte rather than panicking; a partial
+    // sample can't be interpreted anyway.
+    let (samples_le, _remainder) = pcm.as_chunks::<2>();
+    for sample in samples_le {
+        let value = i16::from_le_bytes(*sample) as f64 / 32768.0;
+        sum_squares += value * value;
+        samples += 1;
+    }
+    if samples == 0 {
+        return 0.0;
+    }
+
+    let rms = (sum_squares / samples as f64).sqrt() as f32;
+    if rms <= 1e-6 {
+        return 0.0;
+    }
+    let dbfs = 20.0 * rms.log10();
+    ((dbfs + 60.0) / 60.0).clamp(0.0, 1.0)
+}
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
-    use super::{CaptureError, CaptureFormat, CapturedChunk};
+    use super::{rms_level, CaptureError, CaptureFormat, CapturedChunk};
     use crate::state::{AppState, CaptureDeviceInfo};
     use std::collections::VecDeque;
     use std::sync::Arc;
@@ -250,6 +284,7 @@ mod windows_impl {
 
             while bytes_per_chunk > 0 && sample_queue.len() >= bytes_per_chunk {
                 let pcm: Vec<u8> = sample_queue.drain(..bytes_per_chunk).collect();
+                state.set_audio_level(rms_level(&pcm));
                 let chunk = CapturedChunk {
                     format,
                     timestamp_ms: start.elapsed().as_millis() as u32,
@@ -261,5 +296,69 @@ mod windows_impl {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rms_level;
+
+    fn pcm(samples: &[i16]) -> Vec<u8> {
+        samples.iter().flat_map(|s| s.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn silence_reads_zero() {
+        assert_eq!(rms_level(&pcm(&[0; 64])), 0.0);
+    }
+
+    #[test]
+    fn empty_input_is_not_a_panic() {
+        assert_eq!(rms_level(&[]), 0.0);
+        assert_eq!(rms_level(&[0x00]), 0.0); // half a sample
+    }
+
+    #[test]
+    fn a_trailing_odd_byte_is_ignored_rather_than_misread() {
+        let mut buffer = pcm(&[i16::MAX; 8]);
+        buffer.push(0x7F);
+        assert!((rms_level(&buffer) - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn full_scale_reads_full() {
+        // Alternating +/-full scale is the loudest signal representable.
+        let samples: Vec<i16> = (0..64)
+            .map(|i| if i % 2 == 0 { i16::MAX } else { i16::MIN + 1 })
+            .collect();
+        assert!((rms_level(&pcm(&samples)) - 1.0).abs() < 0.01);
+    }
+
+    /// Halving amplitude is -6dB, which on a 60dB scale is 0.9 of the bar.
+    #[test]
+    fn halving_amplitude_drops_about_six_decibels() {
+        let loud: Vec<i16> = (0..64)
+            .map(|i| if i % 2 == 0 { i16::MAX } else { i16::MIN + 1 })
+            .collect();
+        let quiet: Vec<i16> = loud.iter().map(|s| s / 2).collect();
+        let delta = rms_level(&pcm(&loud)) - rms_level(&pcm(&quiet));
+        assert!(
+            (delta - 0.1).abs() < 0.01,
+            "expected ~0.1 of the bar, got {delta}"
+        );
+    }
+
+    #[test]
+    fn output_is_always_within_the_meter_range() {
+        for amplitude in [0, 1, 100, 5_000, i16::MAX] {
+            let level = rms_level(&pcm(&[amplitude; 32]));
+            assert!((0.0..=1.0).contains(&level), "{amplitude} produced {level}");
+        }
+    }
+
+    /// Anything below the -60dBFS floor pins to zero rather than going negative.
+    #[test]
+    fn very_quiet_signals_pin_to_the_floor() {
+        assert_eq!(rms_level(&pcm(&[1; 128])), 0.0);
     }
 }

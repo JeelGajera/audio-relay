@@ -1,3 +1,8 @@
+// Release builds are GUI apps: without this, double-clicking the .exe opens a
+// console window behind the UI. Debug builds keep the console so `tracing`
+// output is visible while developing.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod capture;
 mod config;
 mod network;

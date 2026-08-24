@@ -5,7 +5,7 @@
 //! machinery isn't worth it.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -108,6 +108,13 @@ pub struct AppState {
     /// against the value it captured at stream-start time and restarts the
     /// WASAPI stream when it no longer matches.
     capture_generation: AtomicU64,
+    /// Most recent capture RMS, 0.0..=1.0, stored as `f32::to_bits`.
+    ///
+    /// Written by the capture thread on every chunk and read by the UI's
+    /// level meter. An atomic rather than a `Mutex` because it is written at
+    /// audio rate (~100Hz) and a dropped update is worth less than a lock
+    /// contended against the audio path.
+    audio_level_bits: AtomicU32,
 }
 
 impl AppState {
@@ -122,7 +129,20 @@ impl AppState {
             available_capture_devices: Mutex::new(Vec::new()),
             selected_capture_device_id: Mutex::new(None),
             capture_generation: AtomicU64::new(0),
+            audio_level_bits: AtomicU32::new(0),
         })
+    }
+
+    /// Current capture level, 0.0..=1.0. Zero when nothing is being captured.
+    pub fn audio_level(&self) -> f32 {
+        f32::from_bits(self.audio_level_bits.load(Ordering::Relaxed))
+    }
+
+    // Written only by the capture loop, which is cfg(windows)-gated.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn set_audio_level(&self, level: f32) {
+        self.audio_level_bits
+            .store(level.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn is_streaming_enabled(&self) -> bool {
