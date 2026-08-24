@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simplified "signal relay" glyph: two concentric arcs feeding a dot,
+         standing in for laptop audio relaying out to a connected device. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,50 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M38,50 a16,16 0 0 1 32,0" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M28,50 a26,26 0 0 1 52,0" />
+</vector>

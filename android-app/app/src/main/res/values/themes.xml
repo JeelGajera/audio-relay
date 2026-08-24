@@ -1,0 +1,6 @@
+<resources>
+    <!-- Minimal window theme for the moment before Compose takes over —
+         this app has no XML view hierarchy, so it doesn't pull in a
+         Material Components theme dependency just for this. -->
+    <style name="Theme.AudioRelay" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

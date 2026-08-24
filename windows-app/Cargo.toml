@@ -1,0 +1,42 @@
+[package]
+name = "audio-relay-windows"
+version = "0.1.0"
+edition = "2021"
+description = "Captures Windows system audio (WASAPI loopback) and relays it to the audio-relay Android app over the LAN."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "audio-relay"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+directories = "5"
+rand = "0.8"
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+chacha20poly1305 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+mdns-sd = "0.11"
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1"
+hostname = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "0.15"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "abort"

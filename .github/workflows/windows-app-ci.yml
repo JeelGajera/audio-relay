@@ -1,0 +1,52 @@
+name: windows-app CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "windows-app/**"
+      - "protocol-spec.md"
+      - ".github/workflows/windows-app-ci.yml"
+  pull_request:
+    paths:
+      - "windows-app/**"
+      - "protocol-spec.md"
+      - ".github/workflows/windows-app-ci.yml"
+
+defaults:
+  run:
+    working-directory: windows-app
+
+jobs:
+  # Fast checks on Linux: protocol/network/config modules are platform-independent
+  # (capture/ is cfg(windows)-gated), so we can lint/test most of the crate here.
+  check-cross-platform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows-app
+      - name: fmt
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test
+
+  # Real target: full build including the WASAPI capture path.
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows-app
+      - name: build
+        run: cargo build --release
+      - name: test
+        run: cargo test
