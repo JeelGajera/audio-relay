@@ -1,13 +1,16 @@
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.serialization")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
-// Build-time git metadata for the About screen (BuildConfig.GIT_HASH /
-// GIT_COMMIT_DATE) — mirrors windows-app/build.rs so both apps' About
-// screens show the same kind of info. Falls back to "unknown" rather than
-// failing the build if git isn't available.
+/**
+ * Build-time git metadata, surfaced through BuildConfig and shown on the
+ * About screen. Mirrors `windows-app/build.rs`. Falls back to "unknown"
+ * rather than failing the build when git isn't available (a source tarball,
+ * a shallow CI checkout without history).
+ */
 fun gitOutput(vararg args: String): String =
     providers.exec {
         commandLine("git", *args)
@@ -16,15 +19,12 @@ fun gitOutput(vararg args: String): String =
 
 android {
     namespace = "com.audiorelay.app"
-    compileSdk = 34
+    compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "com.audiorelay.app"
-        // WASAPI-equivalent constraint on this side: ChaCha20-Poly1305 via
-        // javax.crypto.Cipher needs API 28+ (see network/Crypto.kt), so
-        // there's no point supporting lower API levels for v1.
-        minSdk = 28
-        targetSdk = 34
+        minSdk = libs.versions.minSdk.get().toInt()
+        targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -34,10 +34,46 @@ android {
         buildConfigField("String", "GITHUB_URL", "\"https://github.com/JeelGajera/audio-relay\"")
     }
 
+    /**
+     * Release signing is driven entirely by environment variables so no key
+     * material ever enters the repository — see `docs/releasing.md` for the
+     * secret names and the keytool invocation.
+     *
+     * When they're absent (any local build, any fork's CI) the config is
+     * simply not created and the release variant builds unsigned, so
+     * `assembleRelease` still works as a compile check. That's deliberate:
+     * a build that fails without secrets would make the release variant
+     * untestable for contributors.
+     */
+    val keystorePath: String? = System.getenv("ANDROID_KEYSTORE_PATH")
+    val hasSigningConfig = !keystorePath.isNullOrBlank() && file(keystorePath).exists()
+
+    signingConfigs {
+        if (hasSigningConfig) {
+            create("release") {
+                storeFile = file(keystorePath!!)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (hasSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
     }
 
@@ -45,16 +81,12 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+
     buildFeatures {
         compose = true
         buildConfig = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -62,25 +94,36 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-service:2.8.4")
-    implementation("androidx.activity:activity-compose:1.9.1")
-    implementation("androidx.media:media:1.7.0")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.core.splashscreen)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.media)
+    implementation(libs.androidx.navigation.compose)
 
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core")
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation(platform(libs.compose.bom))
+    implementation(libs.compose.ui)
+    implementation(libs.compose.ui.graphics)
+    implementation(libs.compose.ui.tooling.preview)
+    implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.core)
+    debugImplementation(libs.compose.ui.tooling)
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
 
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    androidTestImplementation("androidx.test.ext:junit:1.2.0")
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation(libs.junit)
+
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.compose.ui.test.junit4)
 }
