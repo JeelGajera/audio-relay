@@ -29,12 +29,16 @@ sealed class ControlMessage {
         val device_id: String,
         val device_name: String,
         val paired: Boolean,
-        val nonce: String? = null,
+        /** Always present — the challenge used in whichever proof this client sends next. */
+        val nonce: String,
     ) : ControlMessage()
 
     @Serializable
     @SerialName("PAIR_REQUEST")
-    data class PairRequest(val code: String) : ControlMessage()
+    data class PairRequest(
+        /** `HMAC-SHA256(code, phone_device_id || nonce)`, hex. The code itself is never sent — see protocol-spec.md §5. */
+        val proof: String,
+    ) : ControlMessage()
 
     @Serializable
     @SerialName("REPAIR")
@@ -42,7 +46,7 @@ sealed class ControlMessage {
 
     @Serializable
     @SerialName("PAIR_OK")
-    data class PairOk(val session_id: String, val session_key: String? = null) : ControlMessage()
+    data class PairOk(val session_id: String) : ControlMessage()
 
     @Serializable
     @SerialName("PAIR_FAIL")

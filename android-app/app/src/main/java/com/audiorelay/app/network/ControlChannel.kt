@@ -56,15 +56,22 @@ class ControlChannel(
             ?: throw ControlChannelException("expected HELLO_ACK as the first reply")
     }
 
-    /** First-time pairing: `code` is what the user typed from the laptop's UI. */
-    suspend fun pairWithCode(code: String, laptopDeviceId: String, laptopDeviceName: String): Paired =
+    /**
+     * First-time pairing: `code` is what the user typed from the laptop's
+     * UI, `nonce` is from the `HELLO_ACK` this connection already received
+     * (see [connect]). The code itself is never sent — we send a proof
+     * instead, and on success derive the session key locally (the laptop
+     * does the same on its side once it verifies the proof) rather than
+     * have it transmitted back to us. See protocol-spec.md §5.
+     */
+    suspend fun pairWithCode(code: String, nonce: String, laptopDeviceId: String, laptopDeviceName: String): Paired =
         withContext(Dispatchers.IO) {
-            send(ControlMessage.PairRequest(code))
+            val proof = Crypto.computePairProof(code, deviceId, nonce)
+            send(ControlMessage.PairRequest(proof))
             when (val reply = readNextMessage()) {
                 is ControlMessage.PairOk -> {
-                    val keyHex = reply.session_key
-                        ?: throw ControlChannelException("PAIR_OK missing session_key on first pair")
-                    finishPairing(laptopDeviceId, laptopDeviceName, Crypto.hexToBytes(keyHex), reply.session_id)
+                    val sessionKey = Crypto.deriveSessionKey(code, deviceId, laptopDeviceId)
+                    finishPairing(laptopDeviceId, laptopDeviceName, sessionKey, reply.session_id)
                 }
                 is ControlMessage.PairFail -> throw ControlChannelException("pairing failed: ${reply.reason}")
                 else -> throw ControlChannelException("unexpected message while pairing: $reply")
@@ -161,7 +168,7 @@ class ControlChannel(
     }
 
     companion object {
-        const val PROTOCOL_VERSION = 1
+        const val PROTOCOL_VERSION = 2
         private const val CONNECT_TIMEOUT_MS = 5_000
         private const val HEARTBEAT_INTERVAL_MS = 1_000L
         private const val MISSED_BEATS_BEFORE_DISCONNECT = 3

@@ -192,15 +192,14 @@ class RelayService : Service() {
                 val paired = if (ack.paired) {
                     val saved = store.getSavedLaptop(ack.device_id)
                         ?: error("laptop reports us as paired but we have no saved key for it")
-                    val nonce = ack.nonce ?: error("HELLO_ACK.paired was true but no nonce was sent")
-                    activeChannel.repair(ack.device_id, ack.device_name, Crypto.hexToBytes(saved.sessionKeyHex), nonce)
+                    activeChannel.repair(ack.device_id, ack.device_name, Crypto.hexToBytes(saved.sessionKeyHex), ack.nonce)
                 } else {
                     RelayState.setStatus(ConnectionStatus.PAIRING_CODE_REQUIRED)
                     RelayState.setPendingPairingTarget(laptop)
                     val deferred = CompletableDeferred<String>()
                     pendingPairingCode = deferred
                     val code = deferred.await()
-                    activeChannel.pairWithCode(code, ack.device_id, ack.device_name)
+                    activeChannel.pairWithCode(code, ack.nonce, ack.device_id, ack.device_name)
                 }
                 pendingPairingCode = null
                 RelayState.setPendingPairingTarget(null)

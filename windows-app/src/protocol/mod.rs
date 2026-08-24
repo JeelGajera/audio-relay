@@ -6,5 +6,7 @@ pub mod control;
 pub mod crypto;
 pub mod packet;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// v2: PAIR_REQUEST carries a proof instead of the raw code, and PAIR_OK no
+/// longer carries key material — see protocol-spec.md's changelog note and §5.
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const SERVICE_TYPE: &str = "_audiorelay._udp.local.";

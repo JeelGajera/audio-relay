@@ -7,6 +7,22 @@ tagged release.
 
 ## [Unreleased]
 
+### Security
+
+- **Protocol v2**: the pairing code is no longer sent over the wire.
+  `PAIR_REQUEST` previously carried the raw code in cleartext, letting a
+  passive LAN eavesdropper recompute the session key from that one packet.
+  It now carries an `HMAC-SHA256(code, phone_device_id || nonce)` proof
+  instead — a fresh nonce from every `HELLO_ACK` — and both sides derive
+  the session key locally via HKDF once the laptop verifies the proof, so
+  the code and the key itself never cross the network. This also fixes a
+  correctness bug where `PAIR_OK` never actually carried the session key it
+  was supposed to on first pairing, which meant pairing could not
+  previously complete. See `protocol-spec.md` §5 for the updated flow.
+- Repair-flow proof verification (`verify_repair_proof`) now uses a
+  constant-time comparison (`subtle::ConstantTimeEq`) instead of `==` on
+  hex strings, closing a timing side-channel on the laptop side.
+
 ### Added
 
 - Project scaffolding: contribution/governance docs (`AGENTS.md`,

@@ -45,6 +45,26 @@ object Crypto {
     }
 
     /**
+     * `HMAC-SHA256(code, phoneDeviceId || nonce)`, hex-encoded — used in the
+     * PAIR_REQUEST flow so first-time pairing never sends the code itself
+     * over the network (see protocol-spec.md §5). Keyed directly by the
+     * code's UTF-8 bytes; HMAC accepts any key length, so a 6-digit code is
+     * a short but valid key here — same approach as
+     * `windows-app/src/protocol/crypto.rs`'s `compute_pair_proof`.
+     *
+     * This app only ever *sends* this proof (it's the pairing initiator),
+     * never verifies one — verification, where constant-time comparison
+     * actually matters, happens laptop-side.
+     */
+    fun computePairProof(code: String, phoneDeviceId: String, nonce: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(code.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        mac.update(phoneDeviceId.toByteArray(Charsets.UTF_8))
+        mac.update(nonce.toByteArray(Charsets.UTF_8))
+        return toHex(mac.doFinal())
+    }
+
+    /**
      * Decrypts one audio packet's payload. `headerAad` is the packet's
      * 13-byte header (unencrypted, authenticated as associated data — see
      * protocol-spec.md §3.1). Throws [AeadException] on any failure

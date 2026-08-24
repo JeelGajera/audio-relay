@@ -21,15 +21,17 @@ pub struct HelloAck {
     pub device_id: String,
     pub device_name: String,
     pub paired: bool,
-    /// Only present when `paired == true`, to be echoed back (HMAC'd) in
-    /// the follow-up `REPAIR` message. See protocol-spec.md §4.2.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<String>,
+    /// Always sent (not just when `paired == true`) — the challenge used in
+    /// the proof the phone sends next, whether that's `PAIR_REQUEST` or
+    /// `REPAIR`. See protocol-spec.md §4.2 / §5.
+    pub nonce: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairRequest {
-    pub code: String,
+    /// `HMAC-SHA256(code, phone_device_id || nonce)`, hex-encoded. The code
+    /// itself is never sent — see protocol-spec.md §5.
+    pub proof: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,9 +43,6 @@ pub struct Repair {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairOk {
     pub session_id: String,
-    /// Absent on a successful `REPAIR` (the persisted key is reused).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -204,13 +203,35 @@ mod tests {
     }
 
     #[test]
-    fn pair_ok_omits_session_key_on_repair_flow() {
+    fn pair_ok_carries_no_key_material() {
         let msg = ControlMessage::PairOk(PairOk {
             session_id: "deadbeef".into(),
-            session_key: None,
         });
         let line = msg.to_line().unwrap();
         assert!(!line.contains("session_key"));
+    }
+
+    #[test]
+    fn hello_ack_nonce_round_trips() {
+        let msg = ControlMessage::HelloAck(HelloAck {
+            protocol_version: 1,
+            device_id: "laptop-1".into(),
+            device_name: "DESKTOP-A1B2C3".into(),
+            paired: false,
+            nonce: "deadbeefdeadbeef".into(),
+        });
+        let line = msg.to_line().unwrap();
+        assert_eq!(ControlMessage::from_line(&line).unwrap().unwrap(), msg);
+    }
+
+    #[test]
+    fn pair_request_carries_a_proof_not_a_code() {
+        let msg = ControlMessage::PairRequest(PairRequest {
+            proof: "abc123".into(),
+        });
+        let line = msg.to_line().unwrap();
+        assert!(!line.contains("\"code\""));
+        assert_eq!(ControlMessage::from_line(&line).unwrap().unwrap(), msg);
     }
 
     #[test]

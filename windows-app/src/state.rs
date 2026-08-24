@@ -182,12 +182,25 @@ impl AppState {
         pairing.current_code.clone().expect("just set above")
     }
 
-    /// Validates a code a connecting device supplied against the currently
-    /// displayed one. Does not consume/rotate the code on failure, so the
-    /// user can retry a mistyped digit.
-    pub fn check_pairing_code(&self, candidate: &str) -> bool {
+    /// Verifies a `PAIR_REQUEST` proof against the currently displayed
+    /// pairing code (protocol-spec.md §5 — the code itself is never sent
+    /// over the network, only this HMAC proof). Returns the code on success
+    /// (the caller needs it to derive the session key), or `None` on any
+    /// failure — no current code, expired, or proof mismatch. Never
+    /// mutates/rotates the code, so the user can retry a mistyped digit.
+    pub fn verify_pairing_proof(
+        &self,
+        phone_device_id: &str,
+        nonce: &str,
+        proof_hex: &str,
+    ) -> Option<String> {
         let pairing = self.pairing.lock().unwrap();
-        pairing.is_current_valid() && pairing.current_code.as_deref() == Some(candidate)
+        if !pairing.is_current_valid() {
+            return None;
+        }
+        let code = pairing.current_code.clone()?;
+        crate::protocol::crypto::verify_pair_proof(&code, phone_device_id, nonce, proof_hex)
+            .then_some(code)
     }
 
     pub fn set_status(&self, status: ConnectionStatus) {
@@ -222,11 +235,43 @@ mod tests {
     }
 
     #[test]
-    fn check_pairing_code_matches_current() {
+    fn verify_pairing_proof_accepts_a_valid_proof_and_returns_the_code() {
         let state = AppState::new(Config::default());
         let code = state.current_pairing_code();
-        assert!(state.check_pairing_code(&code));
-        assert!(!state.check_pairing_code("000000000")); // wrong shape
+        let proof = crate::protocol::crypto::compute_pair_proof(&code, "phone-1", "nonce-1");
+        assert_eq!(
+            state.verify_pairing_proof("phone-1", "nonce-1", &proof),
+            Some(code)
+        );
+    }
+
+    #[test]
+    fn verify_pairing_proof_rejects_a_bogus_proof() {
+        let state = AppState::new(Config::default());
+        state.current_pairing_code();
+        assert_eq!(
+            state.verify_pairing_proof("phone-1", "nonce-1", "not-a-real-proof"),
+            None
+        );
+    }
+
+    #[test]
+    fn verify_pairing_proof_never_leaks_or_needs_the_raw_code_from_the_caller() {
+        // The whole point: a caller only ever has device_id/nonce/proof —
+        // never the code — and verification still succeeds.
+        let state = AppState::new(Config::default());
+        let code = state.current_pairing_code();
+        let proof = crate::protocol::crypto::compute_pair_proof(&code, "phone-1", "nonce-1");
+        assert!(state
+            .verify_pairing_proof("phone-1", "nonce-1", &proof)
+            .is_some());
+        // A proof computed for a different device_id must not verify.
+        let wrong_device_proof =
+            crate::protocol::crypto::compute_pair_proof(&code, "phone-2", "nonce-1");
+        assert_eq!(
+            state.verify_pairing_proof("phone-1", "nonce-1", &wrong_device_proof),
+            None
+        );
     }
 
     #[test]

@@ -85,13 +85,17 @@ async fn handle_connection(
         config.paired_devices.contains_key(&device_id)
     };
 
-    let repair_nonce = crypto::hex_encode(crypto::generate_session_id());
+    // Always sent, first pairing and reconnect alike — it's the challenge
+    // for whichever proof the phone sends next (protocol-spec.md §5). A
+    // fresh nonce per connection means a captured proof can't be replayed
+    // against a later connection attempt.
+    let nonce = crypto::hex_encode(crypto::generate_session_id());
     let ack = ControlMessage::HelloAck(HelloAck {
         protocol_version: PROTOCOL_VERSION,
         device_id: laptop_device_id.clone(),
         device_name: hostname(),
         paired: already_paired,
-        nonce: already_paired.then_some(repair_nonce.clone()),
+        nonce: nonce.clone(),
     });
     write_half.write_all(ack.to_line()?.as_bytes()).await?;
 
@@ -103,7 +107,7 @@ async fn handle_connection(
         &device_id,
         &laptop_device_id,
         &hello.device_name,
-        &repair_nonce,
+        &nonce,
     )
     .await?;
 
@@ -112,7 +116,6 @@ async fn handle_connection(
         .write_all(
             ControlMessage::PairOk(PairOk {
                 session_id: crypto::hex_encode(session_id),
-                session_key: None, // already sent inline during complete_pairing on first pair
             })
             .to_line()?
             .as_bytes(),
@@ -173,7 +176,7 @@ async fn complete_pairing(
     device_id: &str,
     laptop_device_id: &str,
     device_name: &str,
-    repair_nonce: &str,
+    nonce: &str,
 ) -> Result<crypto::SessionKey, ConnError> {
     let mut line = String::new();
     for _ in 0..MAX_PAIR_ATTEMPTS {
@@ -183,8 +186,11 @@ async fn complete_pairing(
         }
         match ControlMessage::from_line(&line)? {
             Some(ControlMessage::PairRequest(req)) => {
-                if state.check_pairing_code(&req.code) {
-                    let key = crypto::derive_session_key(&req.code, device_id, laptop_device_id);
+                // The code itself never crosses the wire — `req.proof` proves
+                // the phone's user typed the same code we're displaying,
+                // without sending it (protocol-spec.md §5).
+                if let Some(code) = state.verify_pairing_proof(device_id, nonce, &req.proof) {
+                    let key = crypto::derive_session_key(&code, device_id, laptop_device_id);
                     state.config.lock().unwrap().remember_device(
                         device_id,
                         device_name,
@@ -215,8 +221,7 @@ async fn complete_pairing(
                 let verified = persisted_key_hex.as_deref().and_then(|hex| {
                     let bytes = crypto::hex_decode(hex).ok()?;
                     let key: crypto::SessionKey = bytes.try_into().ok()?;
-                    crypto::verify_repair_proof(&key, device_id, repair_nonce, &rep.proof)
-                        .then_some(key)
+                    crypto::verify_repair_proof(&key, device_id, nonce, &rep.proof).then_some(key)
                 });
 
                 match verified {

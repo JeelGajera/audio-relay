@@ -30,6 +30,33 @@ class CryptoTest {
     }
 
     @Test
+    fun `pair proof round trips`() {
+        val proof = Crypto.computePairProof("042817", "phone-1", "some-nonce")
+        val expected = Crypto.computePairProof("042817", "phone-1", "some-nonce")
+        assertEquals(expected, proof)
+    }
+
+    @Test
+    fun `pair proof rejects wrong code`() {
+        val proof = Crypto.computePairProof("042817", "phone-1", "some-nonce")
+        val other = Crypto.computePairProof("999999", "phone-1", "some-nonce")
+        assert(proof != other)
+    }
+
+    @Test
+    fun `pair proof rejects wrong nonce`() {
+        val proof = Crypto.computePairProof("042817", "phone-1", "some-nonce")
+        val other = Crypto.computePairProof("042817", "phone-1", "other-nonce")
+        assert(proof != other)
+    }
+
+    @Test
+    fun `pair proof does not leak the code itself`() {
+        val proof = Crypto.computePairProof("042817", "phone-1", "some-nonce")
+        assert(!proof.contains("042817"))
+    }
+
+    @Test
     fun `hex round trips`() {
         val bytes = byteArrayOf(0xDE.toByte(), 0xAD.toByte(), 0xBE.toByte(), 0xEF.toByte())
         val hex = Crypto.toHex(bytes)

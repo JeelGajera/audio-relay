@@ -22,6 +22,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 hmac = "0.12"
 chacha20poly1305 = "0.10"
+subtle = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 mdns-sd = "0.11"
 eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }

@@ -43,10 +43,19 @@ class ControlMessageTest {
     }
 
     @Test
-    fun `pair_ok omits session_key on repair flow`() {
-        val msg = ControlMessage.PairOk(session_id = "deadbeef", session_key = null)
+    fun `pair_ok carries no key material`() {
+        val msg = ControlMessage.PairOk(session_id = "deadbeef")
         val line = msg.toLine()
         assertTrue(!line.contains("session_key"))
+        assertEquals(msg, ControlMessage.parseLine(line))
+    }
+
+    @Test
+    fun `pair_request carries a proof not a code`() {
+        val msg = ControlMessage.PairRequest(proof = "abc123")
+        val line = msg.toLine()
+        assertTrue(!line.contains("\"code\""))
+        assertEquals(msg, ControlMessage.parseLine(line))
     }
 
     @Test

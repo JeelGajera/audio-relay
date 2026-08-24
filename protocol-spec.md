@@ -1,6 +1,13 @@
 # audio-relay protocol specification
 
-**Version: 1** (draft, pre-1.0 — breaking changes are still expected)
+**Version: 2** (draft, pre-1.0 — breaking changes are still expected)
+
+**v2 change (security fix):** the pairing code is no longer sent over the
+network in `PAIR_REQUEST` — v1's design let a passive LAN eavesdropper
+capture the code (and the device IDs used as the HKDF salt) during pairing
+and independently recompute the session key. `PAIR_REQUEST` now carries a
+challenge-response proof instead, the same way `REPAIR` already avoided
+sending the session key — see §4.2 and §5.
 
 This is the canonical definition of the wire protocol between `windows-app`
 and `android-app`. Both implementations must match this document exactly.
@@ -34,7 +41,7 @@ The Windows app advertises a service:
   - `id` — a stable device ID (UUIDv4, generated once and persisted in
     `config.toml`, see `windows-app/README.md`).
   - `name` — human-readable hostname, e.g. `DESKTOP-A1B2C3`.
-  - `protocol_version` — this document's version, as an integer (`1`).
+  - `protocol_version` — this document's version, as an integer (`2`).
 
 The Android app browses for `_audiorelay._udp` via `NsdManager`. Multiple
 laptops on the same network show up as multiple resolved services; the user
@@ -104,15 +111,16 @@ Every message has a `type` field. Unknown `type` values must be ignored
 ```
 Phone                                   Laptop
   |------------- HELLO ------------------>|
-  |<----------- HELLO_ACK ----------------|
+  |<-------- HELLO_ACK{nonce} ------------|
   |                                        |
-  | (first pairing)                       |
-  |------- PAIR_REQUEST{code} ----------->|
-  |<---------- PAIR_OK{...} --------------|
+  | (first pairing — user typed `code`    |
+  |  shown on the laptop's UI)            |
+  |----- PAIR_REQUEST{proof} ------------>|
+  |<---------- PAIR_OK{session_id} -------|
   |                                        |
   | (already paired — reconnect)          |
   |----- REPAIR{device_id, proof} ------->|
-  |<---------- PAIR_OK{...} --------------|
+  |<---------- PAIR_OK{session_id} -------|
   |                                        |
   |<------- CAPABILITIES{...} ------------|
   |-------- CAPABILITIES{...} ----------->|
@@ -126,16 +134,21 @@ Phone                                   Laptop
   |-------------- BYE -------------------->|
 ```
 
+Neither `code` nor `session_key` ever crosses the network, on either path —
+both `PAIR_REQUEST` and `REPAIR` are challenge-response proofs against the
+`nonce` from `HELLO_ACK`, and both sides derive the session key
+independently (see §5).
+
 ### 4.2 Message reference
 
 | `type` | Sender | Fields | Purpose |
 |---|---|---|---|
 | `HELLO` | phone | `protocol_version`, `device_id`, `device_name`, `audio_port` | Opens the session, announces the phone's identity, protocol version, and the UDP port it has already bound and is listening on for audio (not necessarily the same as the TCP control port). The laptop sends audio datagrams to `(tcp_peer_ip, audio_port)`. |
-| `HELLO_ACK` | laptop | `protocol_version`, `device_id`, `device_name`, `paired: bool` | Laptop's identity; `paired` tells the phone whether this laptop already remembers it (skip straight to `REPAIR`) or needs `PAIR_REQUEST`. |
-| `PAIR_REQUEST` | phone | `code` (string, 6 digits) | First-time pairing: user typed the code shown on the laptop's UI. |
-| `REPAIR` | phone | `device_id`, `proof` | Reconnecting a previously-paired device. `proof` = `HMAC-SHA256(persisted_key, device_id \|\| nonce_from_HELLO_ACK)` (nonce is a `nonce` field added to `HELLO_ACK` on this path), hex-encoded. Proves the phone holds the previously-derived key without resending it. |
-| `PAIR_OK` | laptop | `session_id` (hex, 8 bytes), `session_key` (hex, 32 bytes) — **only present on `PAIR_REQUEST` flow**; omitted on successful `REPAIR`, which reuses the persisted key | Pairing/reconnect succeeded. On first pairing, derives and transmits the session key (see §5.2); the control channel itself must be encrypted for this one message using the pairing code as a pre-shared secret, so the session key never crosses the network in the clear even on first pair. |
-| `PAIR_FAIL` | laptop | `reason` | Wrong code / unknown device_id / bad proof. Phone should let the user retry. |
+| `HELLO_ACK` | laptop | `protocol_version`, `device_id`, `device_name`, `paired: bool`, `nonce` (hex, 8 bytes) | Laptop's identity; `paired` tells the phone whether this laptop already remembers it (send `REPAIR`) or needs `PAIR_REQUEST`. `nonce` is a fresh random value, **always sent** (not just on the `paired` path), used as the challenge for whichever proof the phone sends next. |
+| `PAIR_REQUEST` | phone | `proof` (hex) | First-time pairing. `proof` = `HMAC-SHA256(code, phone_device_id \|\| nonce_from_HELLO_ACK)`, hex-encoded, where `code` is the 6-digit code the user read off the laptop's UI and typed into the phone. **The code itself is never sent** — this proves the phone's user typed the same code the laptop is displaying, without putting it on the wire. See §5. |
+| `REPAIR` | phone | `device_id`, `proof` | Reconnecting a previously-paired device. `proof` = `HMAC-SHA256(persisted_key, device_id \|\| nonce_from_HELLO_ACK)`, hex-encoded. Proves the phone holds the previously-derived key without resending it. |
+| `PAIR_OK` | laptop | `session_id` (hex, 8 bytes) | Pairing/reconnect succeeded. No key material is ever included — on both `PAIR_REQUEST` and `REPAIR`, each side independently derives (or already holds) the same session key; see §5. `session_id` seeds the UDP nonce (§3.1). |
+| `PAIR_FAIL` | laptop | `reason` | Wrong code / unknown device_id / bad proof. Phone should let the user retry (same connection, same `nonce` — see §5). |
 | `CAPABILITIES` | both | `sample_rate` (Hz), `channels` | Exchanged after pairing so both sides agree on format before audio starts. Laptop sends what it's actually capturing; phone acks with what it will play (normally matches — see §3, receivers should still honor the header per-packet). |
 | `PING` | either | `t` (sender's monotonic ms) | Heartbeat, sent every 1s by both sides independently. |
 | `PONG` | either | `t` (echoed from the `PING`) | Reply to `PING`. 3 consecutive missed `PONG`s (3s) ⇒ treat as disconnected, close sockets, laptop stops sending audio, phone starts mDNS re-browse with exponential backoff (see `docs/architecture.md` §7). |
@@ -143,31 +156,58 @@ Phone                                   Laptop
 
 ## 5. Pairing & key derivation
 
+**Neither the pairing code nor the derived session key is ever transmitted,
+on either the first-pairing or reconnect path.** Both sides derive the same
+session key independently from values they already have; the network only
+ever carries a proof that each side did so correctly. (v1 of this spec sent
+the code in `PAIR_REQUEST` and the key in `PAIR_OK`, which let a passive LAN
+eavesdropper recover both by capturing one pairing exchange — see the v2
+changelog note at the top of this file.)
+
 1. Laptop generates a random 6-digit `code` (uniform over `000000`–`999999`,
-   cryptographically random) and displays it in its UI. The code is never
-   sent over the network except as the `PAIR_REQUEST.code` field, and only
-   ever after the phone's user has read and typed it — it is a
-   user-transcribed shared secret, not a protocol secret.
-2. Phone sends `PAIR_REQUEST{code}`.
-3. Laptop verifies the code matches what it's currently displaying (and
-   hasn't expired — codes are valid for 5 minutes, then regenerated).
-4. Both sides derive a 32-byte session key via **HKDF-SHA256**:
+   cryptographically random) and displays it in its UI. The code is a
+   user-transcribed shared secret — the phone's user reads it off the
+   laptop's screen and types it into the phone — and is never sent over the
+   network in any form.
+2. Laptop sends a fresh random 8-byte `nonce` (hex-encoded) in every
+   `HELLO_ACK`, regardless of whether it already knows this phone.
+3. **First pairing:** phone computes
+   `proof = HMAC-SHA256(key = code, msg = phone_device_id || nonce)`,
+   hex-encoded, and sends `PAIR_REQUEST{proof}`. Laptop computes the same
+   HMAC using the code it's currently displaying (rejecting if none is
+   currently valid — codes are valid for 5 minutes, then regenerated) and
+   compares it to the received proof **in constant time**. A match proves
+   the phone's user typed the same code the laptop is showing, without the
+   code ever appearing on the wire.
+4. **Reconnect:** phone computes
+   `proof = HMAC-SHA256(key = persisted_session_key, msg = phone_device_id || nonce)`
+   and sends `REPAIR{device_id, proof}`; laptop looks up the persisted key
+   for `device_id` and compares in constant time, as above.
+5. On a successful `PAIR_REQUEST`, both sides derive the 32-byte session key
+   via **HKDF-SHA256**:
    `key = HKDF(ikm = code, salt = device_id_phone || device_id_laptop, info
-   = "audio-relay-session-v1", length = 32)`.
-5. Laptop persists `{device_id: phone_id, session_key, device_name}` to
+   = "audio-relay-session-v1", length = 32)` — the laptop computes this once
+   it has verified the proof; the phone computes the exact same value
+   locally from the code it typed, without waiting for anything from the
+   laptop. On a successful `REPAIR`, both sides already hold the persisted
+   key from the original pairing — nothing new is derived.
+6. Laptop persists `{device_id: phone_id, session_key, device_name}` to
    `config.toml` (see `windows-app/README.md`) so future connections can use
    `REPAIR` instead of asking for the code again. Phone persists the same
    tuple (keyed by laptop's `device_id`) in its local storage.
-6. On every connection (first pair or reconnect), the laptop mints a fresh
+7. On every connection (first pair or reconnect), the laptop mints a fresh
    random `session_id` (used in the UDP nonce, §3.1) and sends it in
    `PAIR_OK`.
 
-This is intentionally lightweight — it is a **pairing code**, not a
-password: it only has to resist a casual "random neighbor on the same
+The 6-digit code is intentionally lightweight — it is a **pairing code**,
+not a password: it only has to resist a casual "random neighbor on the same
 Wi-Fi/hotspot guesses their way in" attacker during the ~5 minute window
-it's displayed and typed once, not a sustained offline attack. Real
-confidentiality of the audio stream comes from the derived session key + the
-per-packet ChaCha20-Poly1305 encryption, not from the code's length.
+it's displayed and typed once, not a sustained offline attack, and an
+online guesser is limited to `MAX_PAIR_ATTEMPTS` (5) tries per connection.
+Real confidentiality of the audio stream comes from the derived session key
++ the per-packet ChaCha20-Poly1305 encryption, not from the code's length —
+but as of v2, an eavesdropper who isn't actively guessing the code no
+longer gets the key for free just by capturing the pairing exchange.
 
 ## 6. Compatibility / versioning
 

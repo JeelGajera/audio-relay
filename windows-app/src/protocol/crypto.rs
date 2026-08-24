@@ -11,6 +11,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 pub const SESSION_KEY_LEN: usize = 32;
@@ -57,16 +58,43 @@ pub fn derive_session_key(code: &str, phone_device_id: &str, laptop_device_id: &
     key
 }
 
+/// `HMAC-SHA256(key, msg_parts.concat())`, raw 32-byte output. Shared by
+/// both proof flavors below — see protocol-spec.md §5.
+fn hmac_sha256(key: &[u8], msg_parts: &[&[u8]]) -> [u8; 32] {
+    let mut mac: Hmac<Sha256> = Mac::new_from_slice(key).expect("HMAC accepts any key length");
+    for part in msg_parts {
+        mac.update(part);
+    }
+    mac.finalize().into_bytes().into()
+}
+
+/// Compares a received hex-encoded proof against the expected raw bytes in
+/// constant time — proof verification gates authentication (first pairing
+/// and reconnect alike), so this must not leak timing information about how
+/// many leading bytes matched. Malformed hex (wrong length, non-hex chars)
+/// is treated as a mismatch, decoded before any secret-dependent branching.
+fn proof_matches(expected: &[u8; 32], proof_hex: &str) -> bool {
+    match hex_decode(proof_hex) {
+        Ok(bytes) if bytes.len() == expected.len() => bool::from(expected.ct_eq(&bytes)),
+        _ => false,
+    }
+}
+
 /// `proof = HMAC-SHA256(persisted_key, device_id || nonce)`, hex-encoded.
 /// Used in the `REPAIR` flow so a reconnecting device can prove it holds
 /// the previously-derived session key without ever resending the key
 /// itself. See protocol-spec.md §4.2.
+///
+/// Not called by this laptop-side binary (which only ever *verifies* a
+/// received proof) — kept as the reference implementation of the phone
+/// side, exercised by the tests below and mirrored in
+/// `android-app/.../network/Crypto.kt`.
+#[allow(dead_code)]
 pub fn compute_repair_proof(session_key: &SessionKey, device_id: &str, nonce: &str) -> String {
-    let mut mac: Hmac<Sha256> =
-        Mac::new_from_slice(session_key).expect("HMAC accepts any key length");
-    mac.update(device_id.as_bytes());
-    mac.update(nonce.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
+    hex_encode(hmac_sha256(
+        session_key,
+        &[device_id.as_bytes(), nonce.as_bytes()],
+    ))
 }
 
 pub fn verify_repair_proof(
@@ -75,7 +103,34 @@ pub fn verify_repair_proof(
     nonce: &str,
     proof_hex: &str,
 ) -> bool {
-    compute_repair_proof(session_key, device_id, nonce) == proof_hex
+    let expected = hmac_sha256(session_key, &[device_id.as_bytes(), nonce.as_bytes()]);
+    proof_matches(&expected, proof_hex)
+}
+
+/// `proof = HMAC-SHA256(code, phone_device_id || nonce)`, hex-encoded. Used
+/// in the `PAIR_REQUEST` flow so first-time pairing never puts the code
+/// itself on the wire — see protocol-spec.md §5. Keyed directly by the
+/// code's UTF-8 bytes (HMAC accepts any key length; a 6-digit code is a
+/// short but perfectly valid HMAC key here).
+///
+/// Not called by this laptop-side binary (which only ever *verifies* a
+/// received proof, via `AppState::verify_pairing_proof`) — kept as the
+/// reference implementation of the phone side, exercised by the tests
+/// below and mirrored in `android-app/.../network/Crypto.kt`.
+#[allow(dead_code)]
+pub fn compute_pair_proof(code: &str, phone_device_id: &str, nonce: &str) -> String {
+    hex_encode(hmac_sha256(
+        code.as_bytes(),
+        &[phone_device_id.as_bytes(), nonce.as_bytes()],
+    ))
+}
+
+pub fn verify_pair_proof(code: &str, phone_device_id: &str, nonce: &str, proof_hex: &str) -> bool {
+    let expected = hmac_sha256(
+        code.as_bytes(),
+        &[phone_device_id.as_bytes(), nonce.as_bytes()],
+    );
+    proof_matches(&expected, proof_hex)
 }
 
 fn build_nonce(session_id: &SessionId, sequence: u32) -> Nonce {
@@ -211,6 +266,52 @@ mod tests {
             "some-nonce",
             &proof
         ));
+    }
+
+    #[test]
+    fn pair_proof_round_trips() {
+        let proof = compute_pair_proof("042817", "phone-1", "some-nonce");
+        assert!(verify_pair_proof("042817", "phone-1", "some-nonce", &proof));
+    }
+
+    #[test]
+    fn pair_proof_rejects_wrong_code() {
+        let proof = compute_pair_proof("042817", "phone-1", "some-nonce");
+        assert!(!verify_pair_proof(
+            "999999",
+            "phone-1",
+            "some-nonce",
+            &proof
+        ));
+    }
+
+    #[test]
+    fn pair_proof_rejects_wrong_nonce() {
+        let proof = compute_pair_proof("042817", "phone-1", "some-nonce");
+        assert!(!verify_pair_proof(
+            "042817",
+            "phone-1",
+            "different-nonce",
+            &proof
+        ));
+    }
+
+    #[test]
+    fn pair_proof_does_not_leak_the_code_itself() {
+        let proof = compute_pair_proof("042817", "phone-1", "some-nonce");
+        assert!(!proof.contains("042817"));
+    }
+
+    #[test]
+    fn proof_verification_rejects_malformed_hex() {
+        assert!(!verify_pair_proof(
+            "042817",
+            "phone-1",
+            "some-nonce",
+            "not-hex!!"
+        ));
+        assert!(!verify_pair_proof("042817", "phone-1", "some-nonce", "abc")); // odd length
+        assert!(!verify_pair_proof("042817", "phone-1", "some-nonce", "")); // wrong length
     }
 
     #[test]
