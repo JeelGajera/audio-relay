@@ -85,7 +85,11 @@ mod windows_impl {
     }
 
     fn capture_loop(tx: UnboundedSender<CapturedChunk>) -> Result<(), CaptureError> {
-        wasapi::initialize_mta().map_err(|e| CaptureError::Wasapi(e.to_string()))?;
+        // initialize_mta() returns a raw HRESULT (not a Result) in this crate version —
+        // .ok() converts S_OK -> Ok(()) and any failure code -> Err(windows::core::Error).
+        wasapi::initialize_mta()
+            .ok()
+            .map_err(|e| CaptureError::Wasapi(e.to_string()))?;
 
         let device = wasapi::get_default_device(&Direction::Render)
             .map_err(|e| CaptureError::Wasapi(format!("no default output device: {e}")))?;
