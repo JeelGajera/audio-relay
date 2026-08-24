@@ -1,10 +1,13 @@
 # android-app
 
 Kotlin/Gradle app: NSD (mDNS) discovery, TCP control-channel client,
-sequence-aware jitter buffer, low-latency `AudioTrack` playback, and the
-foreground service that holds it all together with the screen off. See
-`docs/architecture.md` (repo root) for the full design rationale and
-`protocol-spec.md` for the wire format.
+sequence-aware jitter buffer, low-latency `AudioTrack` playback, the
+foreground service that holds it all together with the screen off, and a
+minimalist three-screen Compose UI (Home / Settings / About) that exposes
+the things a user would actually want to control — which output device to
+route audio to, jitter-buffer depth, and managing paired laptops — rather
+than hiding them. See `docs/architecture.md` (repo root) for the full
+design rationale and `protocol-spec.md` for the wire format.
 
 ## Building
 
@@ -37,12 +40,17 @@ routing to whatever Bluetooth device is already connected.
 | `network/ControlChannel.kt` | Pairing handshake + heartbeat client |
 | `network/AudioReceiver.kt` | UDP receive loop → decrypt → jitter buffer → playback loop |
 | `audio/JitterBuffer.kt` | Sequence-aware jitter buffer with silence concealment (pure Kotlin) |
-| `audio/PlaybackTrack.kt` | Low-latency `AudioTrack` wrapper (`USAGE_MEDIA`) |
+| `audio/PlaybackTrack.kt` | Low-latency `AudioTrack` wrapper (`USAGE_MEDIA`), live output-device switching |
+| `audio/OutputDeviceRepository.kt` | Lists Bluetooth/wired/USB/speaker output routes via `AudioManager` |
 | `discovery/NsdDiscovery.kt` | mDNS browse for `_audiorelay._udp` |
 | `state/PairedDeviceStore.kt` | Persisted device ID + paired laptops (`SharedPreferences`) |
+| `state/SettingsStore.kt` | Persisted preferred output device + jitter-buffer depth |
 | `state/RelayState.kt` | Process-wide observable state shared between the service and the UI |
-| `service/RelayService.kt` | Foreground service wiring everything together |
-| `ui/` | Minimal Compose UI |
+| `service/RelayService.kt` | Foreground service wiring everything together, applies settings live |
+| `ui/AudioRelayApp.kt` | Three-tab app shell (Home / Settings / About) |
+| `ui/HomeScreen.kt` | Status, discovered laptops, pairing-code entry |
+| `ui/SettingsScreen.kt` | Output device picker, jitter-depth slider, paired-laptop management |
+| `ui/AboutScreen.kt` | Version, build commit/date (`BuildConfig`), GitHub link, license info |
 
 ## Testing
 
@@ -69,9 +77,9 @@ plaintext — real evidence the two independent implementations agree on the
 wire format, not just each internally consistent.
 
 Everything that touches the Android framework (`AudioReceiver`,
-`PlaybackTrack`, `NsdDiscovery`, `RelayService`, `MainActivity`,
-`StatusScreen`) has **not** been compiled or run against the real Android
-Gradle Plugin/SDK in this repository's history — the sandbox this was
+`PlaybackTrack`, `OutputDeviceRepository`, `NsdDiscovery`, `RelayService`,
+`MainActivity`, the `ui/` screens) has **not** been compiled or run against
+the real Android Gradle Plugin/SDK in this repository's history — the sandbox this was
 originally written in has outbound network access for most Maven
 repositories (Maven Central, the Gradle Plugin Portal) but not
 `dl.google.com`, which is where the Android Gradle Plugin and the Android
@@ -84,8 +92,13 @@ verification".
 
 ## Known limitations (tracked in `docs/roadmap.md`)
 
-- No adaptive jitter-buffer depth or clock-drift correction yet — see
-  `JitterBuffer.kt`'s class doc.
+- Jitter-buffer depth is user-configurable now, but changes only apply on
+  the next reconnect, not to an already-running buffer — see
+  `JitterBuffer.kt`'s class doc. Clock-drift correction is still not
+  implemented.
 - No `ConnectivityManager` network-change listening yet (relies on the
   heartbeat timeout to notice a dead connection and retry via mDNS).
 - Pairing-code UI is a bare dialog, not polished.
+- `OutputDeviceRepository`'s device list only includes types most relevant
+  to this app (Bluetooth, wired, USB, phone speaker) — not every
+  `AudioDeviceInfo` type Android reports.

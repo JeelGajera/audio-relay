@@ -5,7 +5,7 @@
 //! machinery isn't worth it.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -13,6 +13,50 @@ use crate::config::Config;
 use crate::protocol::crypto::{SessionId, SessionKey};
 
 pub const PAIRING_CODE_TTL_SECS: u64 = 5 * 60;
+
+/// User-configurable capture chunk size — the main latency/glitch-resistance
+/// tradeoff on the sender side (docs/architecture.md §6). Read live by the
+/// capture loop every iteration, so it applies without a restart; changing
+/// the *device* (see `CaptureDeviceInfo`/`capture_generation` below) does
+/// need a restart, since that means reinitializing the WASAPI stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatencyMode {
+    /// ~5ms chunks: lower latency, less headroom for jitter.
+    Low,
+    /// ~10ms chunks: the default — matches the budget in docs/architecture.md §6.
+    Balanced,
+}
+
+impl LatencyMode {
+    // Only read from the capture loop, which is cfg(windows)-gated — see
+    // capture/mod.rs. Not dead code on the platform that matters.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn chunk_ms(self) -> u32 {
+        match self {
+            LatencyMode::Low => 5,
+            LatencyMode::Balanced => 10,
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        match v {
+            0 => LatencyMode::Low,
+            _ => LatencyMode::Balanced,
+        }
+    }
+}
+
+/// One enumerated WASAPI render (output) endpoint the user can choose to
+/// loop-back capture from, instead of always using the system default —
+/// e.g. a laptop with both built-in speakers and a USB DAC. Populated by
+/// the capture thread (device enumeration needs COM initialized on the
+/// calling thread, which only the capture thread does) — see
+/// `capture::windows_impl::enumerate_devices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaptureDeviceInfo {
+    pub id: String,
+    pub name: String,
+}
 
 #[derive(Debug, Clone)]
 pub struct ActiveSession {
@@ -54,6 +98,16 @@ pub struct AppState {
     /// Capture keeps running regardless; this only controls transmission,
     /// so toggling it back on doesn't need to re-negotiate anything.
     streaming_enabled: AtomicBool,
+    latency_mode: AtomicU8,
+    /// Devices found on the last capture-thread enumeration. UI-only reads;
+    /// never written from the UI thread (see `CaptureDeviceInfo`'s doc).
+    pub available_capture_devices: Mutex<Vec<CaptureDeviceInfo>>,
+    selected_capture_device_id: Mutex<Option<String>>,
+    /// Bumped on every device-selection change (and by
+    /// `request_capture_devices_refresh`) — the capture loop compares this
+    /// against the value it captured at stream-start time and restarts the
+    /// WASAPI stream when it no longer matches.
+    capture_generation: AtomicU64,
 }
 
 impl AppState {
@@ -64,6 +118,10 @@ impl AppState {
             session: Mutex::new(None),
             status: Mutex::new(ConnectionStatus::WaitingForConnection),
             streaming_enabled: AtomicBool::new(true),
+            latency_mode: AtomicU8::new(LatencyMode::Balanced as u8),
+            available_capture_devices: Mutex::new(Vec::new()),
+            selected_capture_device_id: Mutex::new(None),
+            capture_generation: AtomicU64::new(0),
         })
     }
 
@@ -73,6 +131,42 @@ impl AppState {
 
     pub fn set_streaming_enabled(&self, enabled: bool) {
         self.streaming_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn latency_mode(&self) -> LatencyMode {
+        LatencyMode::from_u8(self.latency_mode.load(Ordering::Relaxed))
+    }
+
+    pub fn set_latency_mode(&self, mode: LatencyMode) {
+        self.latency_mode.store(mode as u8, Ordering::Relaxed);
+    }
+
+    pub fn selected_capture_device_id(&self) -> Option<String> {
+        self.selected_capture_device_id.lock().unwrap().clone()
+    }
+
+    /// `None` means "system default output device".
+    pub fn set_selected_capture_device(&self, device_id: Option<String>) {
+        *self.selected_capture_device_id.lock().unwrap() = device_id;
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    // Only read from the capture loop, which is cfg(windows)-gated — see
+    // capture/mod.rs. Not dead code on the platform that matters.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn capture_generation(&self) -> u64 {
+        self.capture_generation.load(Ordering::SeqCst)
+    }
+
+    /// Asks the capture thread to re-enumerate devices and restart its
+    /// stream on its next check, without changing the selection.
+    pub fn request_capture_devices_refresh(&self) {
+        self.capture_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub fn publish_capture_devices(&self, devices: Vec<CaptureDeviceInfo>) {
+        *self.available_capture_devices.lock().unwrap() = devices;
     }
 
     /// Returns the currently displayed pairing code, generating a fresh
@@ -151,5 +245,55 @@ mod tests {
 
         assert_eq!(state.clear_session_if("phone-1"), Some("Pixel".to_string()));
         assert!(state.session.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn latency_mode_defaults_to_balanced() {
+        let state = AppState::new(Config::default());
+        assert_eq!(state.latency_mode(), LatencyMode::Balanced);
+        assert_eq!(state.latency_mode().chunk_ms(), 10);
+    }
+
+    #[test]
+    fn latency_mode_round_trips() {
+        let state = AppState::new(Config::default());
+        state.set_latency_mode(LatencyMode::Low);
+        assert_eq!(state.latency_mode(), LatencyMode::Low);
+        assert_eq!(state.latency_mode().chunk_ms(), 5);
+    }
+
+    #[test]
+    fn selecting_a_capture_device_bumps_the_generation() {
+        let state = AppState::new(Config::default());
+        let g0 = state.capture_generation();
+        state.set_selected_capture_device(Some("device-1".into()));
+        assert_eq!(
+            state.selected_capture_device_id(),
+            Some("device-1".to_string())
+        );
+        assert!(state.capture_generation() > g0);
+    }
+
+    #[test]
+    fn refresh_bumps_generation_without_changing_selection() {
+        let state = AppState::new(Config::default());
+        state.set_selected_capture_device(Some("device-1".into()));
+        let g1 = state.capture_generation();
+        state.request_capture_devices_refresh();
+        assert_eq!(
+            state.selected_capture_device_id(),
+            Some("device-1".to_string())
+        );
+        assert!(state.capture_generation() > g1);
+    }
+
+    #[test]
+    fn publish_capture_devices_replaces_the_list() {
+        let state = AppState::new(Config::default());
+        state.publish_capture_devices(vec![CaptureDeviceInfo {
+            id: "d1".into(),
+            name: "Speakers".into(),
+        }]);
+        assert_eq!(state.available_capture_devices.lock().unwrap().len(), 1);
     }
 }

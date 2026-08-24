@@ -1,5 +1,6 @@
 package com.audiorelay.app.state
 
+import com.audiorelay.app.audio.OutputDevice
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +43,20 @@ object RelayState {
     private val _pendingPairingTarget = MutableStateFlow<DiscoveredLaptop?>(null)
     val pendingPairingTarget: StateFlow<DiscoveredLaptop?> = _pendingPairingTarget.asStateFlow()
 
+    // --- Settings screen state (see ui/SettingsScreen.kt) ---
+
+    private val _availableOutputDevices = MutableStateFlow<List<OutputDevice>>(emptyList())
+    val availableOutputDevices: StateFlow<List<OutputDevice>> = _availableOutputDevices.asStateFlow()
+
+    private val _preferredOutputDeviceKey = MutableStateFlow<String?>(null)
+    val preferredOutputDeviceKey: StateFlow<String?> = _preferredOutputDeviceKey.asStateFlow()
+
+    private val _jitterTargetDepthChunks = MutableStateFlow(SettingsStore.DEFAULT_JITTER_DEPTH_CHUNKS)
+    val jitterTargetDepthChunks: StateFlow<Int> = _jitterTargetDepthChunks.asStateFlow()
+
+    private val _pairedLaptops = MutableStateFlow<List<PairedLaptop>>(emptyList())
+    val pairedLaptops: StateFlow<List<PairedLaptop>> = _pairedLaptops.asStateFlow()
+
     fun setStatus(status: ConnectionStatus) {
         _status.value = status
     }
@@ -57,4 +72,22 @@ object RelayState {
     fun setPendingPairingTarget(target: DiscoveredLaptop?) {
         _pendingPairingTarget.value = target
     }
+
+    fun setAvailableOutputDevices(devices: List<OutputDevice>) {
+        _availableOutputDevices.value = devices
+    }
+
+    fun setPreferredOutputDeviceKey(key: String?) {
+        _preferredOutputDeviceKey.value = key
+    }
+
+    fun setJitterTargetDepthChunks(chunks: Int) {
+        _jitterTargetDepthChunks.value = chunks
+    }
+
+    fun setPairedLaptops(laptops: List<PairedLaptop>) {
+        _pairedLaptops.value = laptops
+    }
 }
+
+data class PairedLaptop(val deviceId: String, val name: String)

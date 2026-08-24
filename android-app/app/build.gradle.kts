@@ -4,6 +4,16 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+// Build-time git metadata for the About screen (BuildConfig.GIT_HASH /
+// GIT_COMMIT_DATE) — mirrors windows-app/build.rs so both apps' About
+// screens show the same kind of info. Falls back to "unknown" rather than
+// failing the build if git isn't available.
+fun gitOutput(vararg args: String): String =
+    providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim().ifEmpty { "unknown" }
+
 android {
     namespace = "com.audiorelay.app"
     compileSdk = 34
@@ -18,6 +28,10 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "GIT_HASH", "\"${gitOutput("rev-parse", "--short=10", "HEAD")}\"")
+        buildConfigField("String", "GIT_COMMIT_DATE", "\"${gitOutput("show", "-s", "--format=%cs", "HEAD")}\"")
+        buildConfigField("String", "GITHUB_URL", "\"https://github.com/JeelGajera/audio-relay\"")
     }
 
     buildTypes {
@@ -36,6 +50,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
@@ -58,6 +73,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

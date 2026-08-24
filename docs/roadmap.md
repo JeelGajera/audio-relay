@@ -79,21 +79,32 @@ touching the Android Gradle Plugin/SDK or actual hardware — WASAPI capture,
 ## Phase 5 — Jitter buffer & latency tuning
 
 - [x] Basic fixed-depth jitter buffer with sequence-gap fade-to-silence.
-- [ ] Adaptive/tunable jitter-buffer depth. Not yet implemented — currently
-      a fixed target depth (see `JitterBuffer.kt` `TARGET_DEPTH_MS`).
+- [x] User-configurable jitter-buffer depth (Android Settings screen —
+      `state/SettingsStore.kt`, `ui/SettingsScreen.kt`). Applies on the next
+      reconnect, not to an already-running buffer.
 - [ ] Timestamp-based clock-drift correction over long sessions. The
       timestamp field is in every packet (`protocol-spec.md` §3) but the
       receiver doesn't yet act on drift — flagged as a known gap in
       `CHANGELOG.md`.
-- [ ] Low/Balanced latency-mode toggle in the UI.
+- [x] Low/Balanced latency-mode toggle in the Windows UI (`ui/settings.rs`)
+      — changes the capture chunk size (~5ms vs ~10ms) live, no restart.
 
 ## Phase 6 — UI polish
 
-- [x] Minimal `egui` status window (Windows): connection status, paired
-      device name, Start/Stop.
-- [x] Minimal Compose UI (Android): connected laptop name, Connect/Disconnect.
-- [ ] Pairing-code entry/display polish, latency-mode toggle, matching any
-      future visual design pass. Current UI is functional, not polished.
+- [x] Configurable `egui` UI (Windows) — three tabs: Home (status, pairing
+      code, streaming on/off), Settings (capture-device picker, latency
+      mode, paired-device management), About (version, build commit/date,
+      GitHub link, license/third-party info). See `windows-app/src/ui/`.
+- [x] Configurable Compose UI (Android) — matching three-screen shell:
+      Home, Settings (output-device picker, jitter depth, paired-laptop
+      management), About (version, build commit/date, GitHub link, license
+      info). See `android-app/.../ui/`.
+- [x] Output/capture device selection on both sides — the laptop picks
+      which output device's audio to relay; the phone picks which output
+      device (Bluetooth/wired/USB/speaker) to route to, or leaves it on
+      Android's automatic routing.
+- [ ] Further visual polish (this is a functional, minimalist pass — not a
+      full design system) is open for follow-up.
 
 ## Phase 7 — Optional / future (not built)
 

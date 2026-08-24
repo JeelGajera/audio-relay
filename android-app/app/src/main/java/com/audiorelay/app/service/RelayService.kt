@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioDeviceCallback
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -15,6 +16,7 @@ import android.support.v4.media.session.MediaSessionCompat
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.audiorelay.app.R
+import com.audiorelay.app.audio.OutputDeviceRepository
 import com.audiorelay.app.discovery.NsdDiscovery
 import com.audiorelay.app.network.AudioReceiver
 import com.audiorelay.app.network.ControlChannel
@@ -22,7 +24,9 @@ import com.audiorelay.app.network.Crypto
 import com.audiorelay.app.state.ConnectionStatus
 import com.audiorelay.app.state.DiscoveredLaptop
 import com.audiorelay.app.state.PairedDeviceStore
+import com.audiorelay.app.state.PairedLaptop
 import com.audiorelay.app.state.RelayState
+import com.audiorelay.app.state.SettingsStore
 import com.audiorelay.app.ui.MainActivity
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -33,10 +37,12 @@ import kotlinx.coroutines.launch
 
 /**
  * Foreground service ("mediaPlayback" type) that owns the whole
- * connection lifecycle: discovery, pairing, the control channel, and the
- * audio receive/playback pipeline. Runs with a partial [PowerManager.WakeLock]
- * and a [WifiManager.MulticastLock] so mDNS and the UDP socket keep working
- * with the screen off — see `docs/architecture.md` §3.2.
+ * connection lifecycle: discovery, pairing, the control channel, the audio
+ * receive/playback pipeline, and applying user settings (output device,
+ * jitter buffer depth — see `state/SettingsStore.kt`). Runs with a partial
+ * [PowerManager.WakeLock] and a [WifiManager.MulticastLock] so mDNS and the
+ * UDP socket keep working with the screen off — see
+ * `docs/architecture.md` §3.2.
  *
  * Talks to the UI only through [RelayState] (see that file for why a plain
  * singleton is enough here, rather than a bound-service/Messenger setup).
@@ -49,17 +55,25 @@ class RelayService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private lateinit var store: PairedDeviceStore
+    private lateinit var settings: SettingsStore
+    private lateinit var outputDevices: OutputDeviceRepository
     private lateinit var discovery: NsdDiscovery
     private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var multicastLock: WifiManager.MulticastLock
     private lateinit var mediaSession: MediaSessionCompat
+    private var deviceChangeCallback: AudioDeviceCallback? = null
 
     private var connectJob: Job? = null
     private var pendingPairingCode: CompletableDeferred<String>? = null
 
+    /** The receiver for the currently active session, if any — lets Settings changes (output device) apply live, without a reconnect. */
+    @Volatile private var activeReceiver: AudioReceiver? = null
+
     override fun onCreate() {
         super.onCreate()
         store = PairedDeviceStore(this)
+        settings = SettingsStore(this)
+        outputDevices = OutputDeviceRepository(this)
         discovery = NsdDiscovery(this)
         mediaSession = MediaSessionCompat(this, "AudioRelay").apply { isActive = true }
 
@@ -71,6 +85,12 @@ class RelayService : Service() {
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(null))
+
+        publishSettingsState()
+        refreshOutputDevices()
+        deviceChangeCallback = outputDevices.registerChangeCallback { refreshOutputDevices() }
+        refreshPairedLaptops()
+
         startDiscoveryAndAutoConnect()
     }
 
@@ -88,6 +108,24 @@ class RelayService : Service() {
             ACTION_SUBMIT_PAIRING_CODE -> {
                 intent.getStringExtra(EXTRA_CODE)?.let { pendingPairingCode?.complete(it) }
             }
+            ACTION_SET_OUTPUT_DEVICE -> {
+                val key = intent.getStringExtra(EXTRA_DEVICE_KEY) // null = automatic routing
+                settings.preferredOutputDeviceKey = key
+                RelayState.setPreferredOutputDeviceKey(key)
+                activeReceiver?.updatePreferredOutputDevice(key?.let { outputDevices.findByKey(it) })
+            }
+            ACTION_SET_JITTER_DEPTH -> {
+                val depth = intent.getIntExtra(EXTRA_JITTER_DEPTH, SettingsStore.DEFAULT_JITTER_DEPTH_CHUNKS)
+                settings.jitterTargetDepthChunks = depth
+                RelayState.setJitterTargetDepthChunks(settings.jitterTargetDepthChunks)
+                // Applies on the next session — rebuilding a live jitter buffer's
+                // depth mid-stream isn't worth the complexity for a setting this
+                // low-frequency; see docs/roadmap.md Phase 5.
+            }
+            ACTION_FORGET_LAPTOP -> {
+                intent.getStringExtra(EXTRA_DEVICE_ID)?.let { store.forgetLaptop(it) }
+                refreshPairedLaptops()
+            }
             ACTION_STOP -> stopSelf()
         }
         return START_STICKY
@@ -96,6 +134,7 @@ class RelayService : Service() {
     override fun onDestroy() {
         connectJob?.cancel()
         discovery.stop()
+        deviceChangeCallback?.let { outputDevices.unregisterChangeCallback(it) }
         runCatching { if (wakeLock.isHeld) wakeLock.release() }
         runCatching { if (multicastLock.isHeld) multicastLock.release() }
         mediaSession.isActive = false
@@ -104,6 +143,19 @@ class RelayService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun publishSettingsState() {
+        RelayState.setPreferredOutputDeviceKey(settings.preferredOutputDeviceKey)
+        RelayState.setJitterTargetDepthChunks(settings.jitterTargetDepthChunks)
+    }
+
+    private fun refreshOutputDevices() {
+        RelayState.setAvailableOutputDevices(outputDevices.listOutputDevices())
+    }
+
+    private fun refreshPairedLaptops() {
+        RelayState.setPairedLaptops(store.listPairedLaptops().map { (id, name) -> PairedLaptop(id, name) })
+    }
 
     private fun startDiscoveryAndAutoConnect() {
         RelayState.setStatus(ConnectionStatus.DISCOVERING)
@@ -124,13 +176,16 @@ class RelayService : Service() {
             var receiver: AudioReceiver? = null
             var channel: ControlChannel? = null
             try {
-                val activeReceiver = AudioReceiver().also { receiver = it }
+                val sessionReceiver = AudioReceiver().also {
+                    receiver = it
+                    activeReceiver = it
+                }
                 val activeChannel = ControlChannel(
                     host = laptop.host,
                     port = laptop.port,
                     deviceId = store.deviceId,
                     deviceName = Build.MODEL ?: "Android device",
-                    audioPort = activeReceiver.localPort,
+                    audioPort = sessionReceiver.localPort,
                 ).also { channel = it }
 
                 val ack = activeChannel.connect()
@@ -150,20 +205,30 @@ class RelayService : Service() {
                 pendingPairingCode = null
                 RelayState.setPendingPairingTarget(null)
                 store.saveLaptop(paired.laptopDeviceId, paired.laptopDeviceName, Crypto.toHex(paired.sessionKey))
+                refreshPairedLaptops()
 
-                activeReceiver.configureSession(paired.sessionKey, paired.sessionId, paired.sampleRateHz, paired.channels)
+                val preferredDevice = settings.preferredOutputDeviceKey?.let { outputDevices.findByKey(it) }
+                sessionReceiver.configureSession(
+                    sessionKey = paired.sessionKey,
+                    sessionId = paired.sessionId,
+                    sampleRateHz = paired.sampleRateHz,
+                    channels = paired.channels,
+                    jitterTargetDepthChunks = settings.jitterTargetDepthChunks,
+                    preferredOutputDevice = preferredDevice,
+                )
                 RelayState.setStatus(ConnectionStatus.STREAMING)
                 RelayState.setConnectedDeviceName(paired.laptopDeviceName)
                 updateNotification(paired.laptopDeviceName)
 
-                launch { activeReceiver.receiveLoop() }
-                launch { activeReceiver.playbackLoop() }
+                launch { sessionReceiver.receiveLoop() }
+                launch { sessionReceiver.playbackLoop() }
                 activeChannel.heartbeatLoop() // suspends until disconnect
             } catch (e: Exception) {
                 Log.w(TAG, "connection to ${laptop.name} ended: ${e.message}", e)
             } finally {
                 receiver?.close()
                 channel?.close()
+                activeReceiver = null
                 RelayState.setStatus(ConnectionStatus.DISCONNECTED)
                 RelayState.setConnectedDeviceName(null)
                 updateNotification(null)
@@ -214,11 +279,16 @@ class RelayService : Service() {
 
         const val ACTION_CONNECT = "com.audiorelay.app.action.CONNECT"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.audiorelay.app.action.SUBMIT_PAIRING_CODE"
+        const val ACTION_SET_OUTPUT_DEVICE = "com.audiorelay.app.action.SET_OUTPUT_DEVICE"
+        const val ACTION_SET_JITTER_DEPTH = "com.audiorelay.app.action.SET_JITTER_DEPTH"
+        const val ACTION_FORGET_LAPTOP = "com.audiorelay.app.action.FORGET_LAPTOP"
         const val ACTION_STOP = "com.audiorelay.app.action.STOP"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_NAME = "name"
         const val EXTRA_HOST = "host"
         const val EXTRA_PORT = "port"
         const val EXTRA_CODE = "code"
+        const val EXTRA_DEVICE_KEY = "device_key"
+        const val EXTRA_JITTER_DEPTH = "jitter_depth"
     }
 }

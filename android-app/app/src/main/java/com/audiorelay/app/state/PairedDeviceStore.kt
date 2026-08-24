@@ -47,12 +47,23 @@ class PairedDeviceStore(context: Context) {
             .apply()
     }
 
-    private fun nameKey(laptopDeviceId: String) = "laptop_name_$laptopDeviceId"
+    /** All currently paired laptops, as (device_id, name) — for the Settings screen's paired-device list. */
+    fun listPairedLaptops(): List<Pair<String, String>> =
+        prefs.all.keys
+            .filter { it.startsWith(NAME_KEY_PREFIX) }
+            .mapNotNull { key ->
+                val id = key.removePrefix(NAME_KEY_PREFIX)
+                val name = prefs.getString(key, null) ?: return@mapNotNull null
+                id to name
+            }
+
+    private fun nameKey(laptopDeviceId: String) = "$NAME_KEY_PREFIX$laptopDeviceId"
     private fun keyKey(laptopDeviceId: String) = "laptop_key_$laptopDeviceId"
 
     companion object {
         private const val PREFS_NAME = "audio_relay_state"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_LAST_LAPTOP_ID = "last_laptop_id"
+        private const val NAME_KEY_PREFIX = "laptop_name_"
     }
 }

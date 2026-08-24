@@ -1,5 +1,6 @@
 package com.audiorelay.app.network
 
+import android.media.AudioDeviceInfo
 import com.audiorelay.app.audio.JitterBuffer
 import com.audiorelay.app.audio.PlaybackTrack
 import kotlinx.coroutines.Dispatchers
@@ -30,15 +31,36 @@ class AudioReceiver {
     private var jitterBuffer: JitterBuffer? = null
     private var playback: PlaybackTrack? = null
 
-    /** Call once pairing + capability exchange has completed. */
-    fun configureSession(sessionKey: ByteArray, sessionId: ByteArray, sampleRateHz: Int, channels: Int) {
+    /**
+     * Call once pairing + capability exchange has completed.
+     *
+     * @param jitterTargetDepthChunks user-configurable buffer depth (see
+     *   `state/SettingsStore.kt`) — more chunks trades latency for
+     *   glitch-resistance (docs/architecture.md §6).
+     * @param preferredOutputDevice user-selected output route (see
+     *   `audio/OutputDeviceRepository.kt`), or `null` for Android's normal
+     *   automatic routing.
+     */
+    fun configureSession(
+        sessionKey: ByteArray,
+        sessionId: ByteArray,
+        sampleRateHz: Int,
+        channels: Int,
+        jitterTargetDepthChunks: Int,
+        preferredOutputDevice: AudioDeviceInfo?,
+    ) {
         this.sessionKey = sessionKey
         this.sessionId = sessionId
         // ~10ms chunks, matching the sender's TARGET_CHUNK_MS (windows-app/src/capture/mod.rs).
         val bytesPerSample = 2 // 16-bit PCM
         val chunkSizeBytes = sampleRateHz / 100 * channels * bytesPerSample
-        jitterBuffer = JitterBuffer(chunkSizeBytes)
-        playback = PlaybackTrack(sampleRateHz, channels).also { it.play() }
+        jitterBuffer = JitterBuffer(chunkSizeBytes, targetDepthChunks = jitterTargetDepthChunks)
+        playback = PlaybackTrack(sampleRateHz, channels, preferredOutputDevice).also { it.play() }
+    }
+
+    /** Applies a new output-device choice to the already-playing track, if a session is active. No-op otherwise. */
+    fun updatePreferredOutputDevice(device: AudioDeviceInfo?) {
+        playback?.setPreferredDevice(device)
     }
 
     /** Runs until [close] is called. Launch in its own coroutine. */

@@ -76,7 +76,7 @@ async fn run_network(state: Arc<AppState>) {
     };
 
     let (tx, mut rx) = mpsc::unbounded_channel::<CapturedChunk>();
-    match capture::start_capture(tx) {
+    match capture::start_capture(tx, state.clone()) {
         Ok(_handle) => info!("audio capture started"),
         Err(e) => warn!(error = %e, "audio capture unavailable on this platform/build"),
     }

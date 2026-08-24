@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Captures Windows system audio (WASAPI loopback) and relays it to the audio-relay Android app over the LAN."
 license = "MIT"
+repository = "https://github.com/JeelGajera/audio-relay"
 publish = false
 
 [[bin]]

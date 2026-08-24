@@ -102,7 +102,6 @@ impl Config {
         );
     }
 
-    #[allow(dead_code)] // not wired to the UI yet (docs/roadmap.md Phase 6); covered by tests
     pub fn forget_device(&mut self, phone_device_id: &str) {
         self.paired_devices.remove(phone_device_id);
     }

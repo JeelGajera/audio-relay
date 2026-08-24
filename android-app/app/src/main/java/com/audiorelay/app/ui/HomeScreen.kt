@@ -2,7 +2,6 @@ package com.audiorelay.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,7 +11,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,12 +25,8 @@ import com.audiorelay.app.state.ConnectionStatus
 import com.audiorelay.app.state.DiscoveredLaptop
 import com.audiorelay.app.state.RelayState
 
-/**
- * Minimal functional status UI (docs/roadmap.md Phase 6 — not polished:
- * no latency indicator or richer pairing UX yet, tracked there).
- */
 @Composable
-fun StatusScreen(
+fun HomeScreen(
     onSelectLaptop: (DiscoveredLaptop) -> Unit,
     onSubmitPairingCode: (String) -> Unit,
 ) {
@@ -41,44 +35,37 @@ fun StatusScreen(
     val discoveredLaptops by RelayState.discoveredLaptops.collectAsState()
     val pendingPairingTarget by RelayState.pendingPairingTarget.collectAsState()
 
-    MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
-            Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("audio-relay", style = MaterialTheme.typography.headlineMedium)
+    Column(modifier = Modifier.padding(vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Text("audio-relay", style = MaterialTheme.typography.headlineMedium)
 
-                StatusLine(status, connectedDeviceName)
+        StatusLine(status, connectedDeviceName)
 
-                if (status == ConnectionStatus.DISCOVERING || status == ConnectionStatus.CONNECTING) {
-                    Text("Nearby laptops:", style = MaterialTheme.typography.titleMedium)
-                    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(discoveredLaptops) { laptop ->
-                            Card(modifier = Modifier.fillMaxWidth()) {
-                                Column(modifier = Modifier.padding(16.dp)) {
-                                    Text(laptop.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("${laptop.host}:${laptop.port}", style = MaterialTheme.typography.bodySmall)
-                                    Button(onClick = { onSelectLaptop(laptop) }, modifier = Modifier.padding(top = 8.dp)) {
-                                        Text("Connect")
-                                    }
-                                }
+        if (status == ConnectionStatus.DISCOVERING || status == ConnectionStatus.CONNECTING) {
+            Text("Nearby laptops:", style = MaterialTheme.typography.titleMedium)
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(discoveredLaptops) { laptop ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(laptop.name, style = MaterialTheme.typography.titleSmall)
+                            Text("${laptop.host}:${laptop.port}", style = MaterialTheme.typography.bodySmall)
+                            Button(onClick = { onSelectLaptop(laptop) }, modifier = Modifier.padding(top = 8.dp)) {
+                                Text("Connect")
                             }
                         }
                     }
-                    if (discoveredLaptops.isEmpty()) {
-                        Text(
-                            "Searching… make sure the Windows app is running on the same network.",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
                 }
             }
+            if (discoveredLaptops.isEmpty()) {
+                Text(
+                    "Searching… make sure the Windows app is running on the same network.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
+    }
 
-        if (status == ConnectionStatus.PAIRING_CODE_REQUIRED && pendingPairingTarget != null) {
-            PairingCodeDialog(
-                laptopName = pendingPairingTarget!!.name,
-                onSubmit = onSubmitPairingCode,
-            )
-        }
+    if (status == ConnectionStatus.PAIRING_CODE_REQUIRED && pendingPairingTarget != null) {
+        PairingCodeDialog(laptopName = pendingPairingTarget!!.name, onSubmit = onSubmitPairingCode)
     }
 }
 

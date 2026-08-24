@@ -24,9 +24,12 @@ class MainActivity : ComponentActivity() {
         startRelayService()
 
         setContent {
-            StatusScreen(
+            AudioRelayApp(
                 onSelectLaptop = ::connectToLaptop,
                 onSubmitPairingCode = ::submitPairingCode,
+                onSelectOutputDevice = ::selectOutputDevice,
+                onSetJitterDepth = ::setJitterDepth,
+                onForgetLaptop = ::forgetLaptop,
             )
         }
     }
@@ -55,9 +58,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun submitPairingCode(code: String) {
-        val intent = Intent(this, RelayService::class.java).apply {
-            action = RelayService.ACTION_SUBMIT_PAIRING_CODE
+        sendServiceAction(RelayService.ACTION_SUBMIT_PAIRING_CODE) {
             putExtra(RelayService.EXTRA_CODE, code)
+        }
+    }
+
+    private fun selectOutputDevice(deviceKey: String?) {
+        sendServiceAction(RelayService.ACTION_SET_OUTPUT_DEVICE) {
+            putExtra(RelayService.EXTRA_DEVICE_KEY, deviceKey)
+        }
+    }
+
+    private fun setJitterDepth(chunks: Int) {
+        sendServiceAction(RelayService.ACTION_SET_JITTER_DEPTH) {
+            putExtra(RelayService.EXTRA_JITTER_DEPTH, chunks)
+        }
+    }
+
+    private fun forgetLaptop(deviceId: String) {
+        sendServiceAction(RelayService.ACTION_FORGET_LAPTOP) {
+            putExtra(RelayService.EXTRA_DEVICE_ID, deviceId)
+        }
+    }
+
+    private inline fun sendServiceAction(action: String, configure: Intent.() -> Unit) {
+        val intent = Intent(this, RelayService::class.java).apply {
+            this.action = action
+            configure()
         }
         ContextCompat.startForegroundService(this, intent)
     }

@@ -16,12 +16,17 @@ tagged release.
   message schema.
 - `windows-app`: WASAPI loopback capture, packetizer, mDNS advertise, TCP
   control channel with pairing handshake + heartbeat, UDP audio sender,
-  ChaCha20-Poly1305 payload encryption, TOML config persistence, minimal
-  `egui` status UI.
+  ChaCha20-Poly1305 payload encryption, TOML config persistence.
 - `android-app`: NSD discovery, TCP control channel client, UDP receiver
   with sequence-aware jitter buffer and packet-loss concealment,
   low-latency `AudioTrack` playback via `USAGE_MEDIA`, foreground service
-  with wake lock + multicast lock, minimal Compose UI.
+  with wake lock + multicast lock.
+- Configurable UI on both sides, three screens each (Home / Settings /
+  About): pick which output device audio is captured from (Windows) or
+  played to (Android — Bluetooth/wired/USB/speaker, or automatic), tune
+  latency/jitter-buffer depth, manage paired devices, and an About screen
+  with version, build commit/date, GitHub link, and license/third-party
+  info on both apps.
 
 ### Verified
 

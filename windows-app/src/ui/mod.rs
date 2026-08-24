@@ -1,25 +1,49 @@
-//! Minimal status window (Phase 6 of `docs/roadmap.md` — functional, not
-//! polished; a latency-mode toggle and richer pairing UI are tracked as
-//! follow-ups there). Runs on the main thread via `eframe`; the network/
-//! capture pipeline runs on a background tokio runtime. The two talk only
-//! through the shared `AppState` — the UI never blocks on network I/O.
+//! Minimalist `egui` status window (docs/roadmap.md Phase 6). Runs on the
+//! main thread via `eframe`; the network/capture pipeline runs on a
+//! background tokio runtime. The two talk only through the shared
+//! `AppState` — the UI never blocks on network I/O.
+//!
+//! Three tabs, kept intentionally small and un-nested rather than pulling
+//! in a routing/navigation crate for three screens: `home` (status +
+//! start/stop), `settings` (capture device, latency mode, paired-device
+//! management — everything the user can actually configure), and `about`
+//! (version/build/license info).
+
+mod about;
+mod home;
+mod settings;
 
 use std::sync::Arc;
 
-use crate::state::{AppState, ConnectionStatus};
+use eframe::egui;
+
+use crate::state::AppState;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Home,
+    Settings,
+    About,
+}
 
 pub struct StatusApp {
     state: Arc<AppState>,
+    tab: Tab,
 }
 
 impl StatusApp {
     pub fn new(state: Arc<AppState>) -> Self {
-        StatusApp { state }
+        StatusApp {
+            state,
+            tab: Tab::Home,
+        }
     }
 
     pub fn run(self) -> eframe::Result<()> {
         let options = eframe::NativeOptions {
-            viewport: eframe::egui::ViewportBuilder::default().with_inner_size([360.0, 220.0]),
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([420.0, 460.0])
+                .with_min_inner_size([340.0, 360.0]),
             ..Default::default()
         };
         eframe::run_native("audio-relay", options, Box::new(|_cc| Box::new(self)))
@@ -27,50 +51,27 @@ impl StatusApp {
 }
 
 impl eframe::App for StatusApp {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        // Cheap poll-based refresh — a heartbeat/session change should show
-        // up within a frame or two. Simpler and plenty responsive for a
-        // status window; avoids wiring a second channel just for repaints.
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Cheap poll-based refresh — a heartbeat/session/device-list change
+        // should show up within a frame or two. Simpler and plenty
+        // responsive for a status window; avoids wiring a second channel
+        // just for repaints.
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
 
-        eframe::egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("audio-relay");
-            ui.separator();
+        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Home, "Home");
+                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
+                ui.selectable_value(&mut self.tab, Tab::About, "About");
+            });
+            ui.add_space(4.0);
+        });
 
-            let status = self.state.status.lock().unwrap().clone();
-            match &status {
-                ConnectionStatus::WaitingForConnection => {
-                    ui.label("Waiting for a phone to connect…");
-                    ui.label(format!(
-                        "Pairing code: {}",
-                        self.state.current_pairing_code()
-                    ));
-                    ui.small("Enter this in the Android app. Valid for 5 minutes.");
-                }
-                ConnectionStatus::Streaming { device_name } => {
-                    ui.colored_label(
-                        eframe::egui::Color32::from_rgb(70, 200, 120),
-                        format!("● Streaming to {device_name}"),
-                    );
-                }
-                ConnectionStatus::Disconnected { device_name } => {
-                    ui.colored_label(
-                        eframe::egui::Color32::from_rgb(220, 100, 90),
-                        format!("Disconnected from {device_name} — waiting to reconnect"),
-                    );
-                }
-            }
-
-            ui.separator();
-
-            let mut enabled = self.state.is_streaming_enabled();
-            if ui.checkbox(&mut enabled, "Streaming enabled").changed() {
-                self.state.set_streaming_enabled(enabled);
-            }
-
-            ui.separator();
-            let device_id = self.state.config.lock().unwrap().device_id.clone();
-            ui.small(format!("Device ID: {device_id}"));
+        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+            Tab::Home => home::show(ui, &self.state),
+            Tab::Settings => settings::show(ui, &self.state),
+            Tab::About => about::show(ui),
         });
     }
 }

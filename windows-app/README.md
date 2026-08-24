@@ -1,8 +1,10 @@
 # windows-app
 
 Rust app: WASAPI loopback capture → packetizer → UDP, plus the mDNS
-advertisement, TCP pairing/control channel, and a minimal status window.
-See `docs/architecture.md` (repo root) for the full design rationale and
+advertisement, TCP pairing/control channel, and a minimalist, configurable
+`egui` UI (Home / Settings / About — pick which output device to relay,
+tune latency, manage paired phones, see build info). See
+`docs/architecture.md` (repo root) for the full design rationale and
 `protocol-spec.md` for the wire format.
 
 ## Building
@@ -43,8 +45,11 @@ rights: this is meant to be run straight from wherever you put the `.exe`
 | `network/control_channel.rs` | Accepts phone connections, runs pairing + heartbeat |
 | `network/audio_sender.rs` | Encrypts and sends PCM frames over UDP |
 | `config.rs` | Loads/saves `config.toml` (device ID, paired devices) |
-| `state.rs` | Shared runtime state read/written by network tasks and the UI |
-| `ui/` | Minimal `egui`/`eframe` status window |
+| `state.rs` | Shared runtime state read/written by network tasks and the UI (incl. latency mode, capture device selection) |
+| `ui/home.rs` | Status, pairing code, streaming on/off |
+| `ui/settings.rs` | Capture device picker, latency mode, paired-device management |
+| `ui/about.rs` | Version, build commit/date, GitHub link, license/third-party info |
+| `build.rs` | Injects `GIT_HASH`/`GIT_COMMIT_DATE` at compile time for the About tab |
 
 ## Testing
 
@@ -75,5 +80,11 @@ What unit tests **can't** cover — and what still needs a real machine, see
   `CaptureFormat` once capture and control-channel setup are sequenced
   together.
 - No process-specific loopback ("capture just this app") — captures
-  whatever the default output device is playing, system-wide.
-- No latency-mode toggle in the UI yet.
+  whatever the *selected* output device is playing, system-wide (you can
+  now choose *which* output device, just not a specific app on it).
+- Capture-device enumeration/selection (`src/capture/mod.rs`) is written
+  against the real `wasapi` 0.15.0 crate API (verified by reading its
+  source, not guessed — `DeviceCollection::get_nbr_devices`/
+  `get_device_at_index`/`get_id`/`get_friendlyname` all confirmed), but the
+  restart-on-device-change path itself hasn't run on a real Windows machine
+  with multiple output devices yet — see `docs/roadmap.md` Phase 0.
