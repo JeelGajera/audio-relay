@@ -36,6 +36,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # Type-checking the Windows target from Linux catches mistakes in
+          # cfg(windows) code in seconds. Without it, an error in the WASAPI
+          # or DWM paths is only found by the full Windows build below.
+          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: windows-app
@@ -43,6 +47,8 @@ jobs:
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: clippy (windows target)
+        run: cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings
       - name: test
         run: cargo test
 

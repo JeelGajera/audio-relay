@@ -35,6 +35,8 @@ pub struct CapturedChunk {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
+    // Only ever constructed by the non-Windows stub below.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     #[error("WASAPI loopback capture is only implemented on Windows")]
     UnsupportedPlatform,
     #[cfg(target_os = "windows")]
@@ -279,8 +281,8 @@ mod windows_impl {
             // that this can change without a restart (see module doc).
             let chunk_ms = state.latency_mode().chunk_ms();
             let bytes_per_chunk =
-                (wave_format.get_blockalign() as u32 * wave_format.get_samplespersec() * chunk_ms
-                    / 1000) as usize;
+                (wave_format.get_blockalign() * wave_format.get_samplespersec() * chunk_ms / 1000)
+                    as usize;
 
             while bytes_per_chunk > 0 && sample_queue.len() >= bytes_per_chunk {
                 let pcm: Vec<u8> = sample_queue.drain(..bytes_per_chunk).collect();

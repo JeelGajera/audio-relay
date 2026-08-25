@@ -87,7 +87,7 @@ mod windows_impl {
         let RawWindowHandle::Win32(win32) = handle.as_raw() else {
             return;
         };
-        let hwnd = HWND(win32.hwnd.get() as *mut std::ffi::c_void);
+        let hwnd = HWND(win32.hwnd.get());
 
         let dark: windows::Win32::Foundation::BOOL =
             matches!(cc.egui_ctx.theme(), egui::Theme::Dark).into();
@@ -120,7 +120,7 @@ mod windows_impl {
             if RegOpenKeyExW(
                 HKEY_CURRENT_USER,
                 w!("Software\\Microsoft\\Windows\\DWM"),
-                Some(0),
+                0,
                 KEY_READ,
                 &mut key,
             )
