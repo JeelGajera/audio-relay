@@ -27,10 +27,10 @@ can remove. This project's job is to not add much *on top* of that.
 
 ```
 ┌─────────────────────────┐        ┌──────────────────────────┐
-│   Windows Laptop         │        │   Android Phone           │
+│   Windows/Linux Laptop   │        │   Android Phone           │
 │                          │        │                            │
-│  WASAPI loopback capture │  UDP   │  UDP audio receiver        │
-│         │                │ (PCM)  │         │                  │
+│  Loopback capture (WASAPI│  UDP   │  UDP audio receiver        │
+│   or PulseAudio)         │ (PCM)  │         │                  │
 │         ▼                │───────▶│         ▼                  │
 │  Framer + sequencer      │  LAN/  │  Jitter buffer             │
 │         │                │hotspot │         │                  │
@@ -71,10 +71,11 @@ A browser-based receiver stays a documented future option (roadmap Phase 7)
 if a zero-install phone side ever becomes a priority, but it's the wrong
 trade-off for reliability + latency today.
 
-## 2. Windows component
+## 2. Desktop component
 
 ### 2.1 Audio capture
 
+**Windows:**
 - **API:** WASAPI loopback capture in shared mode, event-driven (not
   polling) for lowest latency.
 - No driver, no admin — this is a standard `IAudioClient` activated on the
@@ -89,11 +90,33 @@ trade-off for reliability + latency today.
   architected for (codec/format fields are per-packet, not global), not
   built, in v1.
 
+**Linux:**
+- **API:** the PulseAudio Simple API (`libpulse-simple-binding`), recording
+  from the selected sink's `.monitor` source — the same "record what you
+  hear" trick as WASAPI loopback, just PulseAudio's version of it. No
+  driver, no root, no PipeWire-specific code needed: PipeWire's
+  `pipewire-pulse` compatibility layer serves the same PulseAudio protocol,
+  so this one backend covers classic PulseAudio and modern PipeWire distros
+  alike (Ubuntu 22.04+, Fedora, etc.).
+- Device enumeration and default-sink resolution go through
+  `libpulse-binding`'s async introspection API (`Context` + a blocking
+  `Mainloop::iterate` poll) since the Simple API has no introspection of
+  its own; the actual audio read is the Simple API's blocking `read()`.
+- Unlike WASAPI, requests a fixed 48kHz stereo S16LE stream rather than
+  whatever rate the sink happens to be running at — PulseAudio resamples
+  internally to match, so this backend never needs WASAPI's "map whatever
+  rate the endpoint hands back onto the protocol's two supported rates"
+  logic (see `protocol-spec.md` §3).
+- Rejected for this: hand-rolled PipeWire bindings (a much larger binding
+  surface for the value) and the `cpal` crate (a new heavyweight dependency
+  per `AGENTS.md`'s "discuss first" rule, and not naturally suited to
+  loopback-monitor recording).
+
 ### 2.2 Language/runtime choice: Rust
 
 | Option | Verdict |
 |---|---|
-| **Rust** (`wasapi` crate + `windows` crate, `tokio`, `egui`/`eframe` for UI) | **Chosen.** Single static binary, zero runtime dependency, smallest attack surface, lowest overhead. The `wasapi` crate already wraps loopback capture cleanly — no need to hand-roll raw COM calls. |
+| **Rust** (`wasapi` + `windows` crates on Windows, `libpulse-binding`/`libpulse-simple-binding` on Linux, `tokio`, `egui`/`eframe` for UI) | **Chosen.** Single static binary per platform, zero runtime dependency, smallest attack surface, lowest overhead. The `wasapi` crate wraps loopback capture cleanly on Windows; the two `libpulse-*-binding` crates are safe wrappers over `libpulse-sys`/`libpulse-simple-sys`, not hand-rolled FFI, on Linux — neither platform needs raw COM/C calls. |
 | C# + NAudio | Faster to prototype, but a self-contained single-file publish is 60–100MB and still needs the .NET runtime bundled — heavier for a "download and run" utility. |
 | C++ raw WASAPI | Maximum control, smallest binary, but slowest to build correctly (COM lifetime bugs, no memory safety). |
 
@@ -102,7 +125,7 @@ present on Win11 but not guaranteed everywhere, and it reintroduces an
 install-adjacent dependency. `egui`/`eframe` is pure Rust, compiles into the
 same static binary, no WebView — keeps the "just an exe" promise airtight.
 
-### 2.3 Windows-side responsibilities
+### 2.3 Desktop-side responsibilities
 
 1. Loopback-capture the default output endpoint continuously.
 2. Chunk into small frames (5–10ms, e.g. 480 samples @ 48kHz) and stamp each
@@ -114,8 +137,9 @@ same static binary, no WebView — keeps the "just an exe" promise airtight.
 5. Stream raw PCM frames over UDP to the paired phone's audio port once
    paired.
 6. Persist last-paired device (ID + derived session key + last-known name)
-   under `%LOCALAPPDATA%\AudioRelay\config.toml` so re-pairing isn't needed
-   every launch.
+   under `%LOCALAPPDATA%\AudioRelay\config.toml` on Windows, or
+   `$XDG_CONFIG_HOME/audiorelay/config.toml` on Linux, so re-pairing isn't
+   needed every launch.
 7. Minimal UI: connection status, paired device name, pairing code when
    unpaired, Start/Stop, latency-mode toggle (Low/Balanced).
 
@@ -239,9 +263,10 @@ one — and that ceiling is set by Bluetooth, not by this project.
 
 ## 9. Summary
 
-Every hard constraint (no admin, no driver, phone stays the BT endpoint)
+Every hard constraint (no admin/root, no driver, phone stays the BT endpoint)
 maps cleanly onto APIs that already exist for exactly this purpose: WASAPI
-loopback on Windows, and normal `USAGE_MEDIA` audio routing plus NSD/mDNS on
-Android. The only externally-imposed ceiling is Bluetooth A2DP latency,
+loopback on Windows, PulseAudio monitor-source capture on Linux, and normal
+`USAGE_MEDIA` audio routing plus NSD/mDNS on Android. The only
+externally-imposed ceiling is Bluetooth A2DP latency,
 which no software on either end can remove — everything else in the
 pipeline is within this project's control and budgeted at under 100ms.

@@ -1,5 +1,5 @@
-# --- Rust / windows-app ---
-windows-app/target/
+# --- Rust / desktop-app ---
+desktop-app/target/
 **/*.rs.bk
 Cargo.lock.bak
 

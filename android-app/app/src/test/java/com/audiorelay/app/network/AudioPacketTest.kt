@@ -6,7 +6,7 @@ import org.junit.Test
 
 class AudioPacketTest {
 
-    /** Builds a raw packet buffer the same way windows-app's `AudioPacket::encode` does. */
+    /** Builds a raw packet buffer the same way desktop-app's `AudioPacket::encode` does. */
     private fun buildPacket(
         codec: Int = 0x00,
         sequence: Long = 42L,

@@ -7,7 +7,7 @@ import kotlin.math.abs
 
 /**
  * These mirror the Rust `rms_level` tests in
- * `windows-app/src/capture/mod.rs`. Both meters must mean the same thing, or
+ * `desktop-app/src/capture/mod.rs`. Both meters must mean the same thing, or
  * the same audio reads differently on the laptop and the phone.
  */
 class AudioLevelTest {

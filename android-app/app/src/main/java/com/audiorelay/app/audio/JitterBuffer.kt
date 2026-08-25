@@ -12,7 +12,7 @@ import java.util.TreeMap
  * releasing audio, and conceals a gap (loss or a chunk that never arrives
  * in time) with silence rather than repeating the last chunk — repeating
  * audibly "stutters" more than a brief dip (protocol-spec.md's sender side
- * of this tradeoff is documented in windows-app's capture module).
+ * of this tradeoff is documented in desktop-app's capture module).
  *
  * ## Clock-drift correction (docs/roadmap.md Phase 5)
  *

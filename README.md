@@ -1,7 +1,9 @@
 # audio-relay
 
-Low-latency Windows → Android audio relay, played back through whatever
-Bluetooth device your phone already has connected.
+Low-latency desktop → Android audio relay, played back through whatever
+Bluetooth device your phone already has connected. The desktop side runs on
+Windows (WASAPI loopback capture) or Linux (PulseAudio/PipeWire monitor
+capture).
 
 No admin rights. No virtual audio driver. No cloud service. Your phone stays
 the Bluetooth endpoint — this project just gets your laptop's audio to it
@@ -10,9 +12,9 @@ audio routing can send it on to your earbuds/speaker exactly like it would
 for Spotify.
 
 ```
-Laptop (Windows)                          Phone (Android)
+Laptop (Windows/Linux)                    Phone (Android)
 ┌─────────────────────────┐               ┌───────────────────────────┐
-│ WASAPI loopback capture  │   UDP (PCM)   │ UDP receiver → jitter buf │
+│ Loopback capture         │   UDP (PCM)   │ UDP receiver → jitter buf │
 │  → framer/sequencer      │──────────────▶│  → AudioTrack (USAGE_MEDIA)│
 │ TCP control (pairing,    │◀─────────────▶│  → routed to your BT      │
 │  heartbeat, reconnect)   │   TCP + mDNS  │    device by Android       │
@@ -39,7 +41,7 @@ fine for video/music/meetings and not intended for competitive gaming.
 
 ```
 audio-relay/
-├── windows-app/       # Rust — WASAPI loopback capture, network, control
+├── desktop-app/       # Rust — loopback capture (WASAPI/PulseAudio), network, control
 ├── android-app/       # Kotlin — receiver, jitter buffer, playback, service
 ├── protocol-spec.md   # Canonical wire protocol — keep both apps in sync
 └── docs/              # Architecture, roadmap, latency budget
@@ -47,20 +49,23 @@ audio-relay/
 
 ## Building
 
-### Windows app (Rust)
+### Desktop app (Rust)
 
-Requires the Rust toolchain (stable) and Windows (WASAPI is a Windows-only
-API — the crate isolates this behind `#[cfg(target_os = "windows")]` so the
+Requires the Rust toolchain (stable), and either Windows or Linux (the
+capture backend is WASAPI on Windows, PulseAudio's Simple API on Linux —
+each isolated behind its own `#[cfg(target_os = "...")]` module, so the
 protocol/network/config modules can still be built and unit-tested on any
-OS).
+OS). Linux additionally needs `libpulse-dev` (or your distro's equivalent)
+at build time; PipeWire distros are covered transparently through their
+`pipewire-pulse` compatibility layer.
 
 ```sh
-cd windows-app
+cd desktop-app
 cargo build
 cargo test
 ```
 
-See [`windows-app/README.md`](windows-app/README.md) for details.
+See [`desktop-app/README.md`](desktop-app/README.md) for details.
 
 ### Android app (Kotlin)
 

@@ -1,7 +1,7 @@
 package com.audiorelay.app.network
 
 /**
- * UDP audio packet decode. Mirrors `windows-app/src/protocol/packet.rs`
+ * UDP audio packet decode. Mirrors `desktop-app/src/protocol/packet.rs`
  * exactly — see `/protocol-spec.md` §3 for the authoritative field
  * definitions. This app is receive-only, so there's no `encode()` here.
  */

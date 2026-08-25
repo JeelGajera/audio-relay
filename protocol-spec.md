@@ -9,7 +9,7 @@ and independently recompute the session key. `PAIR_REQUEST` now carries a
 challenge-response proof instead, the same way `REPAIR` already avoided
 sending the session key — see §4.2 and §5.
 
-This is the canonical definition of the wire protocol between `windows-app`
+This is the canonical definition of the wire protocol between `desktop-app`
 and `android-app`. Both implementations must match this document exactly.
 If you change the protocol, update this file first, bump the version below,
 and update both apps in the same PR — see `AGENTS.md`.
@@ -39,7 +39,7 @@ The Windows app advertises a service:
   `HELLO`, see §4.1 — mDNS only needs to get the phone to the control port).
 - **TXT record keys:**
   - `id` — a stable device ID (UUIDv4, generated once and persisted in
-    `config.toml`, see `windows-app/README.md`).
+    `config.toml`, see `desktop-app/README.md`).
   - `name` — human-readable hostname, e.g. `DESKTOP-A1B2C3`.
   - `protocol_version` — this document's version, as an integer (`2`).
 
@@ -192,7 +192,7 @@ changelog note at the top of this file.)
    laptop. On a successful `REPAIR`, both sides already hold the persisted
    key from the original pairing — nothing new is derived.
 6. Laptop persists `{device_id: phone_id, session_key, device_name}` to
-   `config.toml` (see `windows-app/README.md`) so future connections can use
+   `config.toml` (see `desktop-app/README.md`) so future connections can use
    `REPAIR` instead of asking for the code again. Phone persists the same
    tuple (keyed by laptop's `device_id`) in its local storage.
 7. On every connection (first pair or reconnect), the laptop mints a fresh

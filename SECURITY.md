@@ -29,7 +29,7 @@ Please include:
   device can inject audio into an active session", "pairing code is
   brute-forceable because...").
 - Steps to reproduce, or a proof-of-concept if you have one.
-- The component affected (`windows-app`, `android-app`, or the protocol
+- The component affected (`desktop-app`, `android-app`, or the protocol
   itself) and version/commit.
 
 ## What to expect

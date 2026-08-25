@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 
 /**
  * TCP control-channel messages. Mirrors
- * `windows-app/src/protocol/control.rs` field-for-field — see
+ * `desktop-app/src/protocol/control.rs` field-for-field — see
  * `/protocol-spec.md` §4 for the state machine this implements the client
  * side of.
  */

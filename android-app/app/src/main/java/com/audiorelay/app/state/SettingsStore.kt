@@ -4,8 +4,8 @@ import android.content.Context
 
 /**
  * User-configurable playback settings — the Android-side equivalent of
- * `windows-app`'s capture-device selection and latency mode
- * (`windows-app/src/state.rs`). Backed by `SharedPreferences`, same as
+ * `desktop-app`'s capture-device selection and latency mode
+ * (`desktop-app/src/state.rs`). Backed by `SharedPreferences`, same as
  * [PairedDeviceStore].
  */
 class SettingsStore(context: Context) {
@@ -70,7 +70,7 @@ class SettingsStore(context: Context) {
     }
 }
 
-/** Mirrors `windows-app`'s `ui::theme::Appearance`, so both apps offer the same choice. */
+/** Mirrors `desktop-app`'s `ui::theme::Appearance`, so both apps offer the same choice. */
 enum class ThemeMode {
     SYSTEM,
     LIGHT,

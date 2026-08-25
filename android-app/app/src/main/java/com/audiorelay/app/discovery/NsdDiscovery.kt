@@ -84,7 +84,7 @@ class NsdDiscovery(context: Context) {
 
     companion object {
         private const val TAG = "NsdDiscovery"
-        /** Must match `SERVICE_TYPE` in `windows-app/src/protocol/mod.rs`. */
+        /** Must match `SERVICE_TYPE` in `desktop-app/src/protocol/mod.rs`. */
         const val SERVICE_TYPE = "_audiorelay._udp."
     }
 }

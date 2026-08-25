@@ -20,7 +20,7 @@ welcome.
 ## Development setup
 
 - **Windows app:** Rust stable, `cargo build`/`cargo test`/`cargo clippy` —
-  see [`windows-app/README.md`](windows-app/README.md).
+  see [`desktop-app/README.md`](desktop-app/README.md).
 - **Android app:** Android Studio or the command-line SDK, API 34+ — see
   [`android-app/README.md`](android-app/README.md).
 - Full build/test commands for agents and humans alike are in
@@ -48,7 +48,7 @@ welcome.
 Imperative mood, and prefix with the component when it disambiguates:
 
 ```
-windows-app: fix sequence wraparound in jitter calc
+desktop-app: fix sequence wraparound in jitter calc
 android-app: fade to silence on packet-loss gap instead of repeating samples
 protocol: reserve codec_id=1 for future Opus support
 docs: correct latency budget table for aptX-LL

@@ -53,7 +53,7 @@ class AudioReceiver {
     ) {
         this.sessionKey = sessionKey
         this.sessionId = sessionId
-        // ~10ms chunks, matching the sender's TARGET_CHUNK_MS (windows-app/src/capture/mod.rs).
+        // ~10ms chunks, matching the sender's TARGET_CHUNK_MS (desktop-app/src/capture/mod.rs).
         val bytesPerSample = 2 // 16-bit PCM
         val bytesPerFrame = channels * bytesPerSample
         val chunkSizeBytes = sampleRateHz / 100 * bytesPerFrame

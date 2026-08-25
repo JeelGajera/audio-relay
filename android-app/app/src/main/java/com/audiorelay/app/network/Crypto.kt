@@ -9,7 +9,7 @@ import javax.crypto.spec.SecretKeySpec
 
 /**
  * Pairing-code / session-key / payload-decryption logic. Mirrors
- * `windows-app/src/protocol/crypto.rs` exactly — see `/protocol-spec.md`
+ * `desktop-app/src/protocol/crypto.rs` exactly — see `/protocol-spec.md`
  * §5 for the derivation this implements. This app only ever *decrypts*
  * (it's a receiver), so there's no `encryptPayload` here.
  *
@@ -27,7 +27,7 @@ object Crypto {
     /**
      * HKDF-SHA256(ikm = code, salt = phoneDeviceId || laptopDeviceId, info =
      * "audio-relay-session-v1") -> 32-byte session key. Must match
-     * `derive_session_key` in `windows-app/src/protocol/crypto.rs` exactly.
+     * `derive_session_key` in `desktop-app/src/protocol/crypto.rs` exactly.
      */
     fun deriveSessionKey(code: String, phoneDeviceId: String, laptopDeviceId: String): ByteArray {
         val salt = (phoneDeviceId + laptopDeviceId).toByteArray(Charsets.UTF_8)
@@ -50,7 +50,7 @@ object Crypto {
      * over the network (see protocol-spec.md §5). Keyed directly by the
      * code's UTF-8 bytes; HMAC accepts any key length, so a 6-digit code is
      * a short but valid key here — same approach as
-     * `windows-app/src/protocol/crypto.rs`'s `compute_pair_proof`.
+     * `desktop-app/src/protocol/crypto.rs`'s `compute_pair_proof`.
      *
      * This app only ever *sends* this proof (it's the pairing initiator),
      * never verifies one — verification, where constant-time comparison

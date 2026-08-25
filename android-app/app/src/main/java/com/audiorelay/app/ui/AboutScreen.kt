@@ -25,7 +25,7 @@ import com.audiorelay.app.ui.components.SettingRow
 /**
  * Direct dependencies and their licences. Not the full transitive tree —
  * that is hundreds of artifacts and would drift out of date immediately.
- * Mirrors the same list in `windows-app/src/ui/about.rs`.
+ * Mirrors the same list in `desktop-app/src/ui/about.rs`.
  */
 private val ThirdPartyLicenses = listOf(
     "AndroidX / Jetpack Compose" to "Apache-2.0",

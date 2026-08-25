@@ -13,7 +13,7 @@ import java.net.Socket
  * TCP control-channel client: connects to a laptop, runs the pairing
  * handshake, then the heartbeat loop. One instance per connection. See
  * `/protocol-spec.md` §4 for the message sequence this implements the
- * client side of, and `windows-app/src/network/control_channel.rs` for the
+ * client side of, and `desktop-app/src/network/control_channel.rs` for the
  * server side it talks to.
  *
  * **Unverified against a real laptop** — this has been written to match

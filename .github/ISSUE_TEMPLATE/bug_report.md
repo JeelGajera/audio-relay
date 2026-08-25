@@ -8,7 +8,7 @@ assignees: ""
 
 ## Component
 
-- [ ] `windows-app`
+- [ ] `desktop-app`
 - [ ] `android-app`
 - [ ] Protocol / interop between the two
 - [ ] Docs

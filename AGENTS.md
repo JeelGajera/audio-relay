@@ -6,14 +6,15 @@ guide; `CLAUDE.md` just points here so Claude Code picks it up automatically.
 
 ## What this project is
 
-A two-sided relay: a Rust app on Windows captures system audio via WASAPI
-loopback and streams it over the LAN to a Kotlin Android app, which plays it
-back through whatever Bluetooth device is already connected. Full design
-rationale is in `docs/architecture.md`; the phased build plan is in
+A two-sided relay: a Rust desktop app (Windows via WASAPI loopback, Linux via
+PulseAudio's Simple API against each sink's `.monitor` source) captures
+system audio and streams it over the LAN to a Kotlin Android app, which
+plays it back through whatever Bluetooth device is already connected. Full
+design rationale is in `docs/architecture.md`; the phased build plan is in
 `docs/roadmap.md`; the wire format is the single source of truth in
 `protocol-spec.md`.
 
-**Read `protocol-spec.md` before touching anything in `windows-app/src/protocol/`
+**Read `protocol-spec.md` before touching anything in `desktop-app/src/protocol/`
 or `android-app/.../network/`.** The two apps do not share code (different
 languages, different platforms) — the spec is what keeps them compatible.
 If you change the wire format, update the spec first, bump its version note,
@@ -22,7 +23,7 @@ then update both implementations in the same PR.
 ## Repo layout
 
 ```
-windows-app/    Rust binary — capture, protocol, network, minimal UI
+desktop-app/    Rust binary — capture, protocol, network, minimal UI
 android-app/    Kotlin/Gradle app — discovery, network, audio, foreground service, UI
 protocol-spec.md   Wire format + control messages (canonical)
 docs/           Architecture, roadmap, latency budget
@@ -30,23 +31,29 @@ docs/           Architecture, roadmap, latency budget
 
 ## Build / test / lint commands
 
-### windows-app (Rust)
+### desktop-app (Rust)
 
 ```sh
-cd windows-app
+cd desktop-app
 cargo build              # debug build
 cargo test                # unit tests (protocol/config/network logic — platform-independent)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-Note: `src/capture/` is gated behind `#[cfg(target_os = "windows")]` because
-WASAPI only exists on Windows. On a non-Windows machine, `cargo build`/`test`
-still compile and run everything else (protocol, network, config) — that's
-intentional so CI and non-Windows contributors can validate most of the
-codebase. Full binary builds and any capture-path changes need a Windows
-machine (or the `windows-app-ci` GitHub Actions job, which runs on
-`windows-latest`) to actually verify.
+Note: `src/capture/` has one real backend per supported OS — `windows_impl`
+behind `#[cfg(target_os = "windows")]` (WASAPI) and `linux_impl` behind
+`#[cfg(target_os = "linux")]` (PulseAudio's Simple API, requires
+`libpulse-dev`/equivalent at build time) — plus a stub for anything else. On
+Linux, `cargo build`/`test` compile and run the real Linux capture backend
+alongside protocol/network/config; on any other platform they still compile
+and run everything except capture, which is intentional so CI and
+contributors without a matching OS can validate most of the codebase. Any
+WASAPI-path change needs a Windows machine (or the `desktop-app-ci` job's
+`windows-latest` run) to actually verify; any PulseAudio-path change is
+compile/lint-verified on Linux but still needs a machine with a real
+PulseAudio/PipeWire server running to verify audio actually comes out — see
+`docs/roadmap.md` Phase 0.
 
 ### android-app (Kotlin)
 
@@ -67,13 +74,13 @@ claiming it's verified.
 ## Conventions
 
 - **Commits:** imperative mood, scoped prefix when it helps
-  (`windows-app: fix sequence wraparound in jitter calc`). Keep commits
+  (`desktop-app: fix sequence wraparound in jitter calc`). Keep commits
   focused; don't mix protocol changes with unrelated refactors.
 - **Rust:** `rustfmt` defaults, `clippy` clean (`-D warnings` in CI — don't
   add `#[allow]` to silence a real lint without a comment explaining why).
-  Keep platform-specific code behind `cfg` gates rather than `#[cfg(windows)]`
-  sprinkled ad hoc through shared modules — isolate it in `capture/` and
-  anything else that's genuinely Windows-only.
+  Keep platform-specific code behind `cfg` gates rather than sprinkled ad hoc
+  through shared modules — isolate it in `capture/`'s per-OS submodules and
+  anything else that's genuinely OS-specific.
 - **Kotlin:** standard Android/Kotlin style (4-space indent, no wildcard
   imports). Prefer coroutines/Flow over raw threads/callbacks for anything
   new. Keep `AudioTrack`/socket code off the main thread.

@@ -25,7 +25,21 @@ tagged release.
 
 ### Added
 
-- **A real design system on both apps.** `windows-app` moves off stock egui
+- **Linux desktop support.** `desktop-app` gains `capture::linux_impl`: a
+  PulseAudio Simple API backend that records from the selected output
+  sink's `.monitor` source — the same "record what you hear" trick as
+  WASAPI loopback, PulseAudio's version of it. Transparently covers
+  PipeWire distros too, through PipeWire's `pipewire-pulse`
+  compatibility layer, so there's no separate PipeWire-specific code path.
+  Device enumeration and default-sink resolution go through
+  `libpulse-binding`'s introspection API; the actual capture uses
+  `libpulse-simple-binding`'s blocking `read()`. Requests a fixed 48kHz
+  stereo S16LE stream (PulseAudio resamples internally), so unlike the
+  Windows backend it never needs to map an arbitrary endpoint rate onto
+  the protocol's two supported sample rates. **Unverified against a real
+  PulseAudio/PipeWire server** — see `docs/roadmap.md` Phase 0. Requires
+  `libpulse-dev` (or your distro's equivalent) at build time.
+- **A real design system on both apps.** `desktop-app` moves off stock egui
   (default font, permanently light, three plain tabs, no icon, a console
   window behind it) onto `ui/theme.rs` and `ui/widgets.rs`: semantic colour
   roles in matched dark/light ramps, a left nav rail, an animated toggle, a
@@ -38,9 +52,9 @@ tagged release.
   a splash screen, a NavHost, a bottom-sheet output-device picker, an
   appearance setting, and an animated level visualiser.
 - **Release pipeline** (`docs/releasing.md`): a `v*` tag builds a portable
-  Windows `.exe` and a signed Android APK/AAB with SHA256 checksums and
-  release notes taken from this file. Rehearsable via `workflow_dispatch`
-  before a tag exists.
+  Windows `.exe`, a Linux `.tar.gz`, and a signed Android APK/AAB with
+  SHA256 checksums and release notes taken from this file. Rehearsable via
+  `workflow_dispatch` before a tag exists.
 - **Android toolchain upgrade** to AGP 9.3.2 / Gradle 9.7.1 / Kotlin 2.4.10 /
   Compose BOM 2026.08.00, `compileSdk` and `targetSdk` 36, with all versions
   consolidated into `gradle/libs.versions.toml`. Release builds now minify
@@ -70,7 +84,7 @@ tagged release.
   architecture and roadmap docs, CI workflows.
 - `protocol-spec.md`: canonical UDP audio packet format and TCP control
   message schema.
-- `windows-app`: WASAPI loopback capture, packetizer, mDNS advertise, TCP
+- `desktop-app`: WASAPI loopback capture, packetizer, mDNS advertise, TCP
   control channel with pairing handshake + heartbeat, UDP audio sender,
   ChaCha20-Poly1305 payload encryption, TOML config persistence.
 - `android-app`: NSD discovery, TCP control channel client, UDP receiver
@@ -83,6 +97,13 @@ tagged release.
   latency/jitter-buffer depth, manage paired devices, and an About screen
   with version, build commit/date, GitHub link, and license/third-party
   info on both apps.
+
+### Changed
+
+- **Renamed `windows-app` to `desktop-app`** (crate name
+  `audio-relay-windows` → `audio-relay-desktop`), since it's no longer
+  Windows-only now that a Linux capture backend exists. Platform-specific
+  code stays isolated in `capture::windows_impl`/`capture::linux_impl`.
 
 ### Fixed
 
@@ -108,7 +129,7 @@ tagged release.
 
 ### Verified
 
-- `windows-app`: full `cargo test`/`clippy`/`fmt` pass — 63 tests — including
+- `desktop-app`: full `cargo test`/`clippy`/`fmt` pass — 63 tests — including
   a cross-implementation known-answer test for the ChaCha20-Poly1305 payload
   encryption, and coverage for the theme's contrast/blend helpers and the
   level meter's dBFS mapping.
@@ -124,8 +145,9 @@ tagged release.
 ### Known gaps
 
 - Phase 0 hardware validation spikes (WASAPI on non-admin accounts,
-  `AudioTrack` → A2DP routing, mDNS over an Android hotspot) have not been
-  verified on physical devices in this environment — see
+  PulseAudio/PipeWire monitor-source capture, `AudioTrack` → A2DP routing,
+  mDNS over an Android hotspot) have not been verified on physical devices
+  or against a live audio server in this environment — see
   `docs/roadmap.md`.
 - The Android Gradle Plugin/SDK build itself is unverified in this
   environment (no route to `dl.google.com`) — everything touching the

@@ -7,7 +7,7 @@ import java.util.UUID
  * Persisted app state: this phone's own device ID, and the set of
  * previously paired laptops (keyed by laptop `device_id`) so daily use is
  * "open both apps, they reconnect" per protocol-spec.md §5 — mirrors
- * `windows-app/src/config.rs` on the other side of the pairing.
+ * `desktop-app/src/config.rs` on the other side of the pairing.
  *
  * Backed by `SharedPreferences` rather than a database — this is a
  * handful of small values, not a dataset.

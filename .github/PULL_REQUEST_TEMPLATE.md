@@ -4,7 +4,7 @@
 
 ## Component(s)
 
-- [ ] `windows-app` (Rust)
+- [ ] `desktop-app` (Rust)
 - [ ] `android-app` (Kotlin)
 - [ ] `protocol-spec.md`
 - [ ] Docs / governance
@@ -31,7 +31,7 @@ reasoned about. It's fine to say "compile-checked only, not run on a device"
 
 ## Protocol changes
 
-<!-- If this changes anything in protocol-spec.md: confirm both windows-app
+<!-- If this changes anything in protocol-spec.md: confirm both desktop-app
 and android-app were updated in this PR, and whether protocol_version was
 bumped. Write "N/A" if unaffected. -->
 

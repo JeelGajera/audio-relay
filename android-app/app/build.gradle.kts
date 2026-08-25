@@ -6,7 +6,7 @@ plugins {
 
 /**
  * Build-time git metadata, surfaced through BuildConfig and shown on the
- * About screen. Mirrors `windows-app/build.rs`. Falls back to "unknown"
+ * About screen. Mirrors `desktop-app/build.rs`. Falls back to "unknown"
  * rather than failing the build when git isn't available (a source tarball,
  * a shallow CI checkout without history).
  */

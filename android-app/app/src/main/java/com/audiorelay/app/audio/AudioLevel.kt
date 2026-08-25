@@ -10,7 +10,7 @@ import kotlin.math.sqrt
  * almost at the floor for ordinary listening levels. Maps -60dBFS..0dBFS onto
  * the full range, which is what a level meter is actually useful over.
  *
- * Deliberately mirrors `rms_level` in `windows-app/src/capture/mod.rs`, so
+ * Deliberately mirrors `rms_level` in `desktop-app/src/capture/mod.rs`, so
  * the meter on the laptop and the visualiser on the phone mean the same
  * thing. Pure Kotlin, so it is unit-testable off-device.
  */
