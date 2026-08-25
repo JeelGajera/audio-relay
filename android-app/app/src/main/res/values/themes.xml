@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        The window background before Compose takes over. DayNight so a device
-        in dark mode doesn't flash a white window on launch — the previous
-        theme inherited from android:Theme.Material.Light.NoActionBar, which
-        did exactly that.
+        The window background painted before Compose takes over.
+
+        The parent here is the Light variant rather than DayNight, because
+        DayNight is API 29+ and minSdk is 28; values-v29 overrides it where
+        it is available. The parent barely matters either way — Compose draws
+        every pixel of the actual UI, and windowBackground below is already
+        night-aware via values-night/colors.xml. What matters is not flashing
+        a white window on launch for a dark-mode user, which the previous
+        theme (android:Theme.Material.Light.NoActionBar) did.
     -->
-    <style name="Theme.AudioRelay" parent="android:Theme.DeviceDefault.DayNight">
+    <style name="Theme.AudioRelay" parent="android:Theme.DeviceDefault.Light.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowBackground">@color/window_background</item>
