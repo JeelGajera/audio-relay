@@ -123,19 +123,27 @@ touching the Android Gradle Plugin/SDK or actual hardware — WASAPI capture,
       which output device's audio to relay; the phone picks which output
       device (Bluetooth/wired/USB/speaker) to route to, or leaves it on
       Android's automatic routing.
-- [ ] Further visual polish (this is a functional, minimalist pass — not a
-      full design system) is open for follow-up.
+- [x] Full design system on both sides. `windows-app` gains `ui/theme.rs`
+      (semantic colour roles in matched dark/light ramps, spacing/radius/type
+      scales) and `ui/widgets.rs`, a left nav rail, a Windows 11 Mica
+      backdrop, an embedded app icon and no console window on launch.
+      `android-app` gains `ui/theme/` (brand schemes plus Material You
+      dynamic colour), a real dark mode, edge-to-edge, a NavHost, a
+      bottom-sheet pairing entry, and a live level visualiser.
 
 ## Phase 7 — Optional / future (not built)
 
 Tracked as ideas, not committed work — open an issue if you want to pick one
-up:
+up. (The packaging item below is done; the rest are still ideas.)
 
 - Opus codec fallback for weak/congested networks.
 - Process-specific loopback capture ("capture just this app").
 - Browser-based receiver as a zero-install alternative.
-- Packaging/release pipeline: signed portable `.exe`, signed APK, GitHub
-  Releases automation.
+- [x] Packaging/release pipeline — `.github/workflows/release.yml` builds a
+  portable `.exe` and a signed APK/AAB on a `v*` tag, with checksums and
+  auto-generated notes. See `docs/releasing.md`. The `.exe` is **not**
+  code-signed (that needs a paid certificate); the APK is signed when the
+  keystore secrets are configured.
 
 ## How to contribute against this roadmap
 
@@ -146,3 +154,12 @@ up:
   `CHANGELOG.md`'s `[Unreleased]` section.
 - Phase 0 items can only be checked off with a real on-device test — see
   `CONTRIBUTING.md` → "Hardware verification".
+
+## Not planned without a new capture backend
+
+macOS and Linux builds of the desktop app are sometimes asked for. They are
+not a packaging change: capture is WASAPI, which is Windows-only. Linux would
+need a PipeWire/PulseAudio backend, and macOS has no system-audio loopback
+API at all without a virtual device (BlackHole) or a ScreenCaptureKit
+rewrite. Each is a feature-sized project behind a capture trait — worth
+doing, but not something the release pipeline can produce.

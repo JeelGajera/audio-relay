@@ -1,0 +1,193 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets the whole pipeline be rehearsed on a branch before a tag is cut, so
+  # a broken workflow can't produce a bad public release.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (without the leading v), e.g. 0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The two version numbers live in separate files with no shared source, so
+  # they can and will drift. Fail here rather than shipping a release whose
+  # .exe and .apk disagree about what they are.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: resolve
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "Resolved version: $VERSION"
+
+          CARGO_VERSION=$(grep -m1 '^version = ' windows-app/Cargo.toml | cut -d'"' -f2)
+          GRADLE_VERSION=$(grep -m1 'versionName = ' android-app/app/build.gradle.kts | cut -d'"' -f2)
+
+          echo "Cargo.toml:       $CARGO_VERSION"
+          echo "build.gradle.kts: $GRADLE_VERSION"
+
+          # Strip any prerelease suffix before comparing: v0.2.0-rc1 should
+          # still be built from sources declaring 0.2.0.
+          BASE="${VERSION%%-*}"
+          if [ "$CARGO_VERSION" != "$BASE" ] || [ "$GRADLE_VERSION" != "$BASE" ]; then
+            echo "::error::Version mismatch. Tag says $BASE, Cargo.toml says $CARGO_VERSION, build.gradle.kts says $GRADLE_VERSION."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          case "$VERSION" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *)   echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build-windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows-app
+      - name: Build
+        working-directory: windows-app
+        run: cargo build --release
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="audio-relay-${{ needs.version.outputs.version }}-windows-x86_64"
+          mkdir -p dist
+          cp windows-app/target/release/audio-relay.exe "dist/$NAME.exe"
+          cp LICENSE dist/LICENSE.txt
+          cp windows-app/README.md dist/README.md
+          # A zip rather than an installer: docs/architecture.md commits to a
+          # portable exe that runs from wherever it is put, with no admin.
+          (cd dist && 7z a "$NAME.zip" "$NAME.exe" LICENSE.txt README.md)
+          (cd dist && sha256sum "$NAME.zip" "$NAME.exe" > "$NAME.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/*.sha256
+          if-no-files-found: error
+
+  build-android:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Absent secrets are not an error: the build still runs and produces an
+      # unsigned artifact, which keeps the release path testable from a fork.
+      # The artifact names make the difference obvious.
+      - name: Decode keystore
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set — building UNSIGNED artifacts. See docs/releasing.md."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.jks"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK and AAB
+        working-directory: android-app
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ steps.keystore.outputs.signed == 'true' && format('{0}/release.jks', runner.temp) || '' }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease bundleRelease
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.version.outputs.version }}"
+          SUFFIX=""
+          if [ "${{ steps.keystore.outputs.signed }}" != "true" ]; then
+            SUFFIX="-unsigned"
+          fi
+          mkdir -p dist
+          find android-app/app/build/outputs/apk/release -name '*.apk' -exec cp {} "dist/audio-relay-${VERSION}${SUFFIX}.apk" \;
+          find android-app/app/build/outputs/bundle/release -name '*.aab' -exec cp {} "dist/audio-relay-${VERSION}${SUFFIX}.aab" \;
+          (cd dist && sha256sum ./*.apk ./*.aab > "audio-relay-${VERSION}-android.sha256")
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: [version, build-windows, build-android]
+    runs-on: ubuntu-latest
+    # A dispatch run rehearses the builds but must not publish anything.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect artifacts and notes
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          # One combined checksum file is easier to point people at than
+          # several per-platform ones.
+          (cd dist && cat ./*.sha256 | sed 's|\./||' | sort -k2 > SHA256SUMS.txt && rm -f ./*.sha256)
+
+          # Release notes come from the [Unreleased] section of the changelog,
+          # which is where the work is already described.
+          awk '/^## \[Unreleased\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "See CHANGELOG.md for details." > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo
+            echo "**Windows:** portable \`.exe\` — no installer, no admin rights. Unsigned, so SmartScreen will warn on first run; verify against \`SHA256SUMS.txt\`."
+            echo
+            echo "**Android:** install the \`.apk\` directly. The \`.aab\` is for Play Store submission and is not installable by hand."
+          } >> notes.md
+          ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: notes.md
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true

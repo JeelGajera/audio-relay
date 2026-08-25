@@ -11,7 +11,14 @@
 agp = "9.3.2"
 kotlin = "2.4.10"
 
-compileSdk = "36"
+# compileSdk is deliberately ahead of targetSdk. The current androidx
+# artifacts refuse to be consumed by anything compiling against less than 37,
+# but targetSdk is what opts the app in to new *runtime* behaviour — and this
+# app is a foreground service doing audio and networking, which is precisely
+# the area that tends to change between API levels. Nothing here has been run
+# on a device, so raising targetSdk is left as a deliberate, testable step
+# rather than something smuggled in with a build fix.
+compileSdk = "37"
 minSdk = "28"      # ChaCha20-Poly1305 via javax.crypto.Cipher needs API 28
 targetSdk = "36"
 

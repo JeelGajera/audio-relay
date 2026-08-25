@@ -25,6 +25,26 @@ tagged release.
 
 ### Added
 
+- **A real design system on both apps.** `windows-app` moves off stock egui
+  (default font, permanently light, three plain tabs, no icon, a console
+  window behind it) onto `ui/theme.rs` and `ui/widgets.rs`: semantic colour
+  roles in matched dark/light ramps, a left nav rail, an animated toggle, a
+  status pill that breathes while streaming, per-digit pairing-code boxes, a
+  live output level meter, a generated app icon embedded in the `.exe`, a
+  Windows 11 Mica backdrop with the system accent colour, and Segoe UI loaded
+  from the system. `android-app` moves off a bare `MaterialTheme {}` — which
+  meant the baseline light palette permanently, even on a phone in dark mode
+  — onto a full theme package with Material You dynamic colour, edge-to-edge,
+  a splash screen, a NavHost, a bottom-sheet output-device picker, an
+  appearance setting, and an animated level visualiser.
+- **Release pipeline** (`docs/releasing.md`): a `v*` tag builds a portable
+  Windows `.exe` and a signed Android APK/AAB with SHA256 checksums and
+  release notes taken from this file. Rehearsable via `workflow_dispatch`
+  before a tag exists.
+- **Android toolchain upgrade** to AGP 9.3.2 / Gradle 9.7.1 / Kotlin 2.4.10 /
+  Compose BOM 2026.08.00, `compileSdk` and `targetSdk` 36, with all versions
+  consolidated into `gradle/libs.versions.toml`. Release builds now minify
+  and shrink resources.
 - **Clock-drift correction** (roadmap Phase 5): the receiver now acts on each
   packet's `timestamp_ms`. Sender and receiver clocks are never exactly
   equal, so over a long session the jitter buffer used to leak one way —
@@ -66,6 +86,20 @@ tagged release.
 
 ### Fixed
 
+- CI had **never run on push**: both workflows triggered on `branches: [main]`
+  while the default branch is `master`, so only `pull_request` events ever
+  fired. The release `.exe` and debug APK CI built were also discarded rather
+  than uploaded.
+- Pairing on Android could not be cancelled — the dialog's `onDismissRequest`
+  was a no-op, so once the prompt appeared there was no way out of it.
+- `RelayService.ACTION_STOP` existed but was unreachable from anywhere; the
+  only way to stop the service was to force-stop the app. It is now a Stop
+  action on the notification.
+- The Android tab selection reset to Home on every rotation, because it was
+  held in `remember` rather than surviving configuration change.
+- The foreground-service notification used a borrowed framework icon
+  (`android.R.drawable.ic_media_play`), so it looked like another app's
+  notification.
 - A session that ended while waiting for the user to type a pairing code left
   the pairing prompt on screen with nothing behind it.
 - `CancellationException` was caught and swallowed alongside real errors in
@@ -74,9 +108,10 @@ tagged release.
 
 ### Verified
 
-- `windows-app`: full `cargo test`/`clippy`/`fmt` pass, including a
-  cross-implementation known-answer test for the ChaCha20-Poly1305 payload
-  encryption.
+- `windows-app`: full `cargo test`/`clippy`/`fmt` pass — 63 tests — including
+  a cross-implementation known-answer test for the ChaCha20-Poly1305 payload
+  encryption, and coverage for the theme's contrast/blend helpers and the
+  level meter's dBFS mapping.
 - `android-app`: every platform-independent module (`AudioPacket`,
   `ControlMessage`, `Crypto`, `JitterBuffer`, `ReconnectBackoff`) compiled
   and unit-tested against the project's actual Kotlin 1.9.24/`kotlinx`
@@ -102,4 +137,13 @@ tagged release.
   revisit.
 - Network-change handling cannot be exercised here at all — it needs a real
   device actually moving between networks.
-- No packaging/release pipeline yet (single portable `.exe`, signed APK).
+- The Windows `.exe` is not code-signed — Authenticode needs a paid
+  certificate, so SmartScreen warns on first run. Checksums are published
+  instead.
+- No Play Store upload. The release builds an `.aab` so this is a drop-in
+  later, but nothing publishes it.
+- macOS and Linux desktop builds are not possible without a new capture
+  backend; WASAPI is Windows-only. See `docs/roadmap.md`.
+- Nothing in the visual redesign has been seen on real hardware: the Mica
+  backdrop, dynamic colour, themed icons and the bottom sheet against gesture
+  navigation all need eyes on a real screen.
