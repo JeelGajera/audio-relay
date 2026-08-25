@@ -379,7 +379,7 @@ mod vector_gen {
     /// print_known_answer_vector -- --nocapture`) used to generate the
     /// hardcoded values in both `known_vector_matches_android_side` below
     /// and `android-app/.../test/.../CryptoTest.kt`'s
-    /// `decryptPayload matches the windows-app reference vector` test.
+    /// `decryptPayload matches the desktop-app reference vector` test.
     /// Keep this around — regenerate + update both sides together if the
     /// derivation ever changes.
     #[test]

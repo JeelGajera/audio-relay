@@ -1,8 +1,8 @@
 [package]
-name = "audio-relay-windows"
+name = "audio-relay-desktop"
 version = "0.1.0"
 edition = "2021"
-description = "Captures Windows system audio (WASAPI loopback) and relays it to the audio-relay Android app over the LAN."
+description = "Captures desktop system audio (WASAPI loopback on Windows, PulseAudio monitor capture on Linux) and relays it to the audio-relay Android app over the LAN."
 license = "MIT"
 repository = "https://github.com/JeelGajera/audio-relay"
 publish = false
@@ -47,6 +47,16 @@ raw-window-handle = "0.6"
 [target.'cfg(windows)'.build-dependencies]
 # Build-time only: stamps the generated .ico and version info into the .exe.
 winresource = "0.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Loopback capture via each sink's PulseAudio ".monitor" source — see
+# `capture::linux_impl` doc comment. `libpulse-simple-binding` covers the
+# blocking read side; `libpulse-binding` is needed on top of it purely for
+# device enumeration (the Simple API has no introspection of its own).
+# Safe wrappers over `libpulse-sys`/`libpulse-simple-sys`, not hand-rolled
+# FFI. Requires `libpulse-dev` (or distro equivalent) at build time.
+libpulse-binding = "2.30"
+libpulse-simple-binding = "2.29"
 
 [dev-dependencies]
 tempfile = "3"

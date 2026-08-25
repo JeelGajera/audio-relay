@@ -3,8 +3,11 @@
 //! than re-entering a pairing code every launch). See
 //! `docs/architecture.md` §2.3 and `protocol-spec.md` §5.
 //!
-//! Lives at `%LOCALAPPDATA%\AudioRelay\config.toml` on Windows. Never
-//! commit a real one — see the root `.gitignore`.
+//! Lives at `%LOCALAPPDATA%\AudioRelay\config.toml` on Windows, or
+//! `$XDG_CONFIG_HOME/audiorelay/config.toml` (falling back to
+//! `~/.config/audiorelay/config.toml`) on Linux — both via
+//! `directories::ProjectDirs`. Never commit a real one — see the root
+//! `.gitignore`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
