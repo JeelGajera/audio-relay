@@ -1,6 +1,9 @@
 package com.audiorelay.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -106,7 +109,7 @@ fun StatusPill(
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(900), androidx.compose.animation.core.RepeatMode.Reverse),
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
         label = "status-pulse-alpha",
     )
     val dotAlpha = if (pulsing) pulse else 1f
@@ -152,7 +155,7 @@ fun LevelVisualizer(
     val phase by transition.animateFloat(
         initialValue = 0f,
         targetValue = (2 * Math.PI).toFloat(),
-        animationSpec = infiniteRepeatable(tween(1400, easing = androidx.compose.animation.core.LinearEasing)),
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing)),
         label = "level-phase-value",
     )
     val smoothed by animateFloatAsState(
