@@ -30,6 +30,7 @@ import com.audiorelay.app.state.PairedDeviceStore
 import com.audiorelay.app.state.PairedLaptop
 import com.audiorelay.app.state.RelayState
 import com.audiorelay.app.state.SettingsStore
+import com.audiorelay.app.state.ThemeMode
 import com.audiorelay.app.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -154,6 +155,23 @@ class RelayService : Service() {
                 // depth mid-stream isn't worth the complexity for a setting this
                 // low-frequency; see docs/roadmap.md Phase 5.
             }
+            ACTION_CANCEL_PAIRING -> {
+                // The user backed out of the pairing sheet. Cancel the waiting
+                // session rather than leaving it blocked on a code that will
+                // never arrive.
+                serviceScope.launch { cancelActiveSession() }
+                RelayState.setStatus(ConnectionStatus.DISCOVERING)
+            }
+            ACTION_SET_THEME_MODE -> {
+                val mode = ThemeMode.fromStoredName(intent.getStringExtra(EXTRA_THEME_MODE))
+                settings.themeMode = mode
+                RelayState.setThemeMode(mode)
+            }
+            ACTION_SET_DYNAMIC_COLOR -> {
+                val enabled = intent.getBooleanExtra(EXTRA_DYNAMIC_COLOR, true)
+                settings.dynamicColor = enabled
+                RelayState.setDynamicColor(enabled)
+            }
             ACTION_FORGET_LAPTOP -> {
                 intent.getStringExtra(EXTRA_DEVICE_ID)?.let { store.forgetLaptop(it) }
                 refreshPairedLaptops()
@@ -190,6 +208,8 @@ class RelayService : Service() {
     private fun publishSettingsState() {
         RelayState.setPreferredOutputDeviceKey(settings.preferredOutputDeviceKey)
         RelayState.setJitterTargetDepthChunks(settings.jitterTargetDepthChunks)
+        RelayState.setThemeMode(settings.themeMode)
+        RelayState.setDynamicColor(settings.dynamicColor)
     }
 
     private fun refreshOutputDevices() {
@@ -416,6 +436,7 @@ class RelayService : Service() {
                 receiver?.close()
                 channel?.close()
                 activeReceiver = null
+                RelayState.setPlaybackLevel(0f)
                 // Clear pairing state unconditionally: if the session died
                 // while waiting for a code, the prompt would otherwise stay on
                 // screen forever with nothing behind it.
@@ -455,12 +476,22 @@ class RelayService : Service() {
         } else {
             getString(R.string.notification_idle)
         }
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, RelayService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentIntent(contentIntent)
             .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            // ACTION_STOP existed but was never reachable from anywhere — the
+            // only way to stop the service was to force-stop the app.
+            .addAction(0, getString(R.string.action_stop), stopIntent)
             .build()
     }
 
@@ -487,6 +518,9 @@ class RelayService : Service() {
         const val ACTION_SET_JITTER_DEPTH = "com.audiorelay.app.action.SET_JITTER_DEPTH"
         const val ACTION_FORGET_LAPTOP = "com.audiorelay.app.action.FORGET_LAPTOP"
         const val ACTION_STOP = "com.audiorelay.app.action.STOP"
+        const val ACTION_CANCEL_PAIRING = "com.audiorelay.app.action.CANCEL_PAIRING"
+        const val ACTION_SET_THEME_MODE = "com.audiorelay.app.action.SET_THEME_MODE"
+        const val ACTION_SET_DYNAMIC_COLOR = "com.audiorelay.app.action.SET_DYNAMIC_COLOR"
         const val EXTRA_DEVICE_ID = "device_id"
         const val EXTRA_NAME = "name"
         const val EXTRA_HOST = "host"
@@ -494,5 +528,7 @@ class RelayService : Service() {
         const val EXTRA_CODE = "code"
         const val EXTRA_DEVICE_KEY = "device_key"
         const val EXTRA_JITTER_DEPTH = "jitter_depth"
+        const val EXTRA_THEME_MODE = "theme_mode"
+        const val EXTRA_DYNAMIC_COLOR = "dynamic_color"
     }
 }

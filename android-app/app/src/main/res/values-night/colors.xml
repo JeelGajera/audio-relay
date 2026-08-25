@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Matches AudioRelayDarkColors.background in ui/theme/Color.kt. Kept in
+        sync by hand because the launch window is painted by the framework
+        before any Compose code runs.
+    -->
+    <color name="window_background">#101418</color>
+</resources>

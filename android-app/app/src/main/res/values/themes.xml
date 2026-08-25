@@ -1,6 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Minimal window theme for the moment before Compose takes over —
-         this app has no XML view hierarchy, so it doesn't pull in a
-         Material Components theme dependency just for this. -->
-    <style name="Theme.AudioRelay" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+        The window background before Compose takes over. DayNight so a device
+        in dark mode doesn't flash a white window on launch — the previous
+        theme inherited from android:Theme.Material.Light.NoActionBar, which
+        did exactly that.
+    -->
+    <style name="Theme.AudioRelay" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
+
+    <!--
+        The launch theme, installed by installSplashScreen() in MainActivity.
+        postSplashScreenTheme is what the window switches to once the app is
+        drawing, so the icon never lingers over a live UI.
+    -->
+    <style name="Theme.AudioRelay.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.AudioRelay</item>
+    </style>
 </resources>

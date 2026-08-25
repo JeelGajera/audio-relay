@@ -1,6 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    All user-facing text lives here rather than inline in Kotlin. Previously
+    only four strings were externalised and every screen hard-coded English,
+    which made the app untranslatable and the copy hard to review in one pass.
+-->
 <resources>
     <string name="app_name">audio-relay</string>
-    <string name="notification_channel_name">audio-relay streaming</string>
+    <string name="about_tagline">Laptop audio, on your headphones.</string>
+
+    <!-- Navigation -->
+    <string name="nav_status">Status</string>
+    <string name="nav_settings">Settings</string>
+    <string name="nav_about">About</string>
+
+    <!-- Home headlines -->
+    <string name="home_headline_looking">Looking for your laptop</string>
+    <string name="home_headline_streaming">Streaming</string>
+    <string name="home_headline_pairing">Almost there</string>
+    <string name="home_headline_reconnecting">Reconnecting</string>
+    <string name="home_headline_network_changed">Network changed</string>
+
+    <!-- Status pill. %1$s is the laptop name where one is known. -->
+    <string name="status_idle">Starting up</string>
+    <string name="status_discovering">Searching the network</string>
+    <string name="status_connecting">Connecting</string>
+    <string name="status_pairing_required">Waiting for the pairing code</string>
+    <string name="status_streaming">Playing from %1$s</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_reconnecting">Retrying shortly</string>
+    <string name="status_network_changed">Searching again on the new network</string>
+    <string name="status_generic_laptop">your laptop</string>
+
+    <string name="home_now_playing">Now playing</string>
+    <string name="home_now_playing_hint">Live level of the audio reaching your output device.</string>
+    <string name="home_nearby_title">Nearby laptops</string>
+    <string name="home_nearby_hint">Laptops running audio-relay on this network.</string>
+    <string name="home_searching">Searching… make sure the desktop app is running on the same network.</string>
+
+    <!-- Pairing -->
+    <string name="pairing_title">Pair with %1$s</string>
+    <string name="pairing_hint">Enter the six-digit code shown on the laptop.</string>
+
+    <!-- Settings -->
+    <string name="settings_output_title">Output device</string>
+    <string name="settings_output_hint">Where audio is played — Bluetooth headphones, wired, USB, or the phone speaker.</string>
+    <string name="settings_output_automatic">Automatic</string>
+    <string name="settings_output_automatic_hint">Follow Android\'s normal routing. Recommended.</string>
+    <string name="settings_output_none">No output devices reported yet.</string>
+
+    <string name="settings_buffer_title">Buffer size</string>
+    <string name="settings_buffer_hint">Smaller means less delay; larger rides out a busy network. Applies on the next connection.</string>
+    <string name="settings_buffer_value">~%1$dms</string>
+
+    <string name="settings_appearance_title">Appearance</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_dynamic_color">Colour from wallpaper</string>
+    <string name="settings_dynamic_color_hint">Material You. Android 12 and above; ignored below that.</string>
+
+    <string name="settings_paired_title">Paired laptops</string>
+    <string name="settings_paired_hint">Laptops this phone can reconnect to without a new code.</string>
+    <string name="settings_paired_none">No laptops paired yet.</string>
+    <string name="settings_forget_title">Forget %1$s?</string>
+    <string name="settings_forget_body">You will need to enter a new pairing code to connect to it again.</string>
+
+    <!-- About -->
+    <string name="about_build_title">Build</string>
+    <string name="about_version">Version</string>
+    <string name="about_commit">Commit</string>
+    <string name="about_commit_date">Commit date</string>
+    <string name="about_project_title">Project</string>
+    <string name="about_source">Source on GitHub</string>
+    <string name="about_report_issue">Report an issue</string>
+    <string name="about_licenses_title">Licences</string>
+    <string name="about_licenses_hint">audio-relay is MIT licensed. Direct dependencies below.</string>
+
+    <!-- Actions -->
+    <string name="action_connect">Connect</string>
+    <string name="action_pair">Pair</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_change">Change</string>
+    <string name="action_forget">Forget</string>
+    <string name="action_stop">Stop</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">Audio relay</string>
     <string name="notification_streaming">Streaming laptop audio from %1$s</string>
-    <string name="notification_idle">Waiting for a laptop to connect to</string>
+    <string name="notification_idle">Waiting for a laptop</string>
 </resources>

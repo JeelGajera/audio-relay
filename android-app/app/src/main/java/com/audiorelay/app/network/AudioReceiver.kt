@@ -1,8 +1,10 @@
 package com.audiorelay.app.network
 
 import android.media.AudioDeviceInfo
+import com.audiorelay.app.audio.AudioLevel
 import com.audiorelay.app.audio.JitterBuffer
 import com.audiorelay.app.audio.PlaybackTrack
+import com.audiorelay.app.state.RelayState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -112,6 +114,11 @@ class AudioReceiver {
                 delay(PREBUFFER_POLL_INTERVAL_MS)
                 continue
             }
+            // Measured here rather than on receive, so the visualiser reflects
+            // what actually reaches the speaker — including concealment
+            // silence during packet loss, which is exactly when a user is
+            // looking at it.
+            RelayState.setPlaybackLevel(AudioLevel.fromPcm16(chunk))
             playback?.write(chunk)
         }
     }
