@@ -1,22 +1,22 @@
-name: windows-app CI
+name: desktop-app CI
 
 on:
   push:
     branches: [master]
     paths:
-      - "windows-app/**"
+      - "desktop-app/**"
       - "protocol-spec.md"
-      - ".github/workflows/windows-app-ci.yml"
+      - ".github/workflows/desktop-app-ci.yml"
   pull_request:
     paths:
-      - "windows-app/**"
+      - "desktop-app/**"
       - "protocol-spec.md"
-      - ".github/workflows/windows-app-ci.yml"
+      - ".github/workflows/desktop-app-ci.yml"
   workflow_dispatch:
 
 # Superseded runs on the same branch are pointless once a newer commit exists.
 concurrency:
-  group: windows-app-${{ github.ref }}
+  group: desktop-app-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -24,15 +24,19 @@ permissions:
 
 defaults:
   run:
-    working-directory: windows-app
+    working-directory: desktop-app
 
 jobs:
-  # Fast checks on Linux: protocol/network/config modules are platform-independent
-  # (capture/ is cfg(windows)-gated), so we can lint/test most of the crate here.
+  # Fast checks on Linux: protocol/network/config modules are platform-independent,
+  # and the PulseAudio capture backend (capture::linux_impl) is real Linux code —
+  # only the WASAPI path (capture::windows_impl) is cfg(windows)-gated, so we can
+  # lint/test the rest of the crate, plus type-check the Windows target, here.
   check-cross-platform:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install libpulse-dev
+        run: sudo apt-get update && sudo apt-get install -y libpulse-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -42,7 +46,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: windows-app
+          workspaces: desktop-app
       - name: fmt
         run: cargo fmt --check
       - name: clippy
@@ -60,7 +64,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: windows-app
+          workspaces: desktop-app
       - name: build
         run: cargo build --release
       - name: test
@@ -71,6 +75,31 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audio-relay-windows-x86_64-${{ github.sha }}
-          path: windows-app/target/release/audio-relay.exe
+          path: desktop-app/target/release/audio-relay.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  # Real target: full build including the PulseAudio capture path.
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install libpulse-dev
+        run: sudo apt-get update && sudo apt-get install -y libpulse-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop-app
+      - name: build
+        run: cargo build --release
+      - name: test
+        run: cargo test
+      # Keep the binary this job already built, so a reviewer can try a change
+      # without a Rust toolchain. Not a release artifact — see release.yml.
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-relay-linux-x86_64-${{ github.sha }}
+          path: desktop-app/target/release/audio-relay
           if-no-files-found: error
           retention-days: 14
