@@ -73,11 +73,10 @@ impl AudioSender {
             // not the parent chunk's, so the receiver's drift measurement
             // (which keys off forward progress of this timestamp) still
             // sees a monotonic clock rather than a stutter of repeats.
-            let offset_ms = if bytes_per_ms == 0 {
-                0
-            } else {
-                (i * per_packet / bytes_per_ms) as u32
-            };
+            // `checked_div` rather than a hand-rolled zero guard: identical
+            // behaviour, and it says "this division may not be defined"
+            // in one place instead of two.
+            let offset_ms = (i * per_packet).checked_div(bytes_per_ms).unwrap_or(0) as u32;
             self.send_one(
                 &session,
                 sample_rate,
