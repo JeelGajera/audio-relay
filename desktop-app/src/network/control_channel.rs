@@ -156,7 +156,7 @@ async fn handle_connection(
     });
     info!(%audio_addr, "session established, audio streaming can begin");
 
-    let result = heartbeat_loop(&mut reader, &mut write_half).await;
+    let result = heartbeat_loop(&mut reader, &mut write_half, &state, &device_id).await;
 
     let device_name = state
         .clear_session_if(&device_id)
@@ -248,6 +248,8 @@ async fn complete_pairing(
 async fn heartbeat_loop(
     reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
     write_half: &mut tokio::net::tcp::OwnedWriteHalf,
+    state: &Arc<AppState>,
+    device_id: &str,
 ) -> Result<(), ConnError> {
     let mut ticker = interval(HEARTBEAT_INTERVAL);
     let mut last_pong = Instant::now();
@@ -256,6 +258,25 @@ async fn heartbeat_loop(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                // The user forgetting this phone (Settings → paired devices)
+                // clears its session. Without noticing that here, the
+                // connection just carried on: audio kept flowing to a phone
+                // the laptop had supposedly forgotten, the laptop stayed in
+                // "Streaming" so it never showed a pairing code, and the
+                // only way back to a usable state was restarting the app.
+                // Dropping the connection instead sends the phone through a
+                // fresh handshake, where it is correctly told it is no
+                // longer paired.
+                let session_revoked = state
+                    .session
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .is_none_or(|s| s.phone_device_id != device_id);
+                if session_revoked {
+                    info!(%device_id, "session was revoked; closing the control connection");
+                    return Ok(());
+                }
                 if last_pong.elapsed() > HEARTBEAT_INTERVAL * MISSED_BEATS_BEFORE_DISCONNECT {
                     return Ok(()); // treated as a clean disconnect, not an error
                 }

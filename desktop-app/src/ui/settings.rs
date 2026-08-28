@@ -2,7 +2,7 @@ use eframe::egui;
 
 use super::theme::{self, space, Appearance};
 use super::widgets;
-use crate::state::{AppState, LatencyMode};
+use crate::state::{AppState, ConnectionStatus, LatencyMode};
 
 /// Returns a new [`Appearance`] when the user changed it, so the caller can
 /// apply and persist it. Everything else on this screen writes straight
@@ -83,6 +83,26 @@ fn capture_device_card(ui: &mut egui::Ui, state: &AppState) {
                  startup.",
             );
         }
+
+        ui.add_space(space::MD);
+        let mut play_locally = state.play_locally_while_relaying();
+        let changed = widgets::setting_row(
+            ui,
+            "Also play locally while relaying",
+            Some(
+                "On: this laptop keeps playing out loud, same as normal. Off: mutes this \
+                 laptop's output while streaming, so only the phone plays it.",
+            ),
+            |ui| widgets::toggle_switch(ui, &mut play_locally).changed(),
+        );
+        if changed {
+            state.set_play_locally_while_relaying(play_locally);
+            let mut config = state.config.lock().unwrap();
+            config.play_locally_while_relaying = play_locally;
+            if let Err(e) = config.save() {
+                tracing::warn!(error = %e, "could not persist play-locally-while-relaying setting");
+            }
+        }
     });
 }
 
@@ -161,6 +181,22 @@ fn paired_devices_card(ui: &mut egui::Ui, state: &AppState) {
             return;
         }
 
+        // Each fresh install of the phone app is a new device identity, so
+        // repeated re-installs (or a factory reset) leave a pile of entries
+        // that all show the same phone name and differ only by an opaque id.
+        // Forgetting them one at a time is busywork, and picking the "right"
+        // one is guesswork, so offer the bulk action too.
+        let mut forget_all = false;
+        if devices.len() > 1 {
+            ui.horizontal(|ui| {
+                widgets::muted_label(ui, &format!("{} entries", devices.len()));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    forget_all = ui.button("Forget all").clicked();
+                });
+            });
+            ui.add_space(space::SM);
+        }
+
         let mut to_forget: Option<String> = None;
         for (id, name) in &devices {
             let short_id: String = id.chars().take(8).collect();
@@ -172,11 +208,42 @@ fn paired_devices_card(ui: &mut egui::Ui, state: &AppState) {
             ui.add_space(space::XS);
         }
 
+        if forget_all {
+            let ids: Vec<String> = devices.iter().map(|(id, _)| id.clone()).collect();
+            {
+                let mut config = state.config.lock().unwrap();
+                for id in &ids {
+                    config.forget_device(id);
+                }
+                if let Err(e) = config.save() {
+                    tracing::warn!(error = %e, "could not persist forgetting every device");
+                }
+            }
+            for id in &ids {
+                if let Some(name) = state.clear_session_if(id) {
+                    state.set_status(ConnectionStatus::Disconnected { device_name: name });
+                }
+            }
+        }
+
         if let Some(id) = to_forget {
-            let mut config = state.config.lock().unwrap();
-            config.forget_device(&id);
-            if let Err(e) = config.save() {
-                tracing::warn!(error = %e, "could not persist forgetting a device");
+            {
+                let mut config = state.config.lock().unwrap();
+                config.forget_device(&id);
+                if let Err(e) = config.save() {
+                    tracing::warn!(error = %e, "could not persist forgetting a device");
+                }
+            }
+            // Forgetting has to end the session too, not just erase the key.
+            // Leaving the connection up meant audio kept flowing to a phone
+            // this laptop had just been told to forget, and — because the
+            // status stayed "Streaming" — the Home screen never showed a
+            // pairing code, so there was no way to pair again without
+            // restarting the app. The control channel notices the revoked
+            // session on its next heartbeat tick and closes the connection,
+            // which sends the phone back through a full handshake.
+            if let Some(name) = state.clear_session_if(&id) {
+                state.set_status(ConnectionStatus::Disconnected { device_name: name });
             }
         }
     });

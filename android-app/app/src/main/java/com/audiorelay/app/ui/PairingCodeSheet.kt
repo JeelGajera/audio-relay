@@ -56,8 +56,13 @@ fun PairingCodeSheet(
     laptopName: String,
     onSubmit: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** Set when the laptop refused the previous code, so the retry says why. */
+    rejected: Boolean = false,
 ) {
     var code by remember { mutableStateOf("") }
+    // A refusal clears the boxes, so the retry starts from empty rather than
+    // leaving the rejected digits sitting there looking accepted.
+    LaunchedEffect(rejected) { if (rejected) code = "" }
     val focusRequester = remember { FocusRequester() }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
@@ -77,9 +82,13 @@ fun PairingCodeSheet(
                 style = MaterialTheme.typography.headlineSmall,
             )
             Text(
-                stringResource(R.string.pairing_hint),
+                stringResource(if (rejected) R.string.pairing_rejected else R.string.pairing_hint),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (rejected) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
 
             Box {

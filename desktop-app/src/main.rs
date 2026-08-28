@@ -26,6 +26,11 @@ use state::AppState;
 /// latency-mode toggle and any future settings UI.
 const CONTROL_PORT: u16 = 45108;
 
+/// Capture→sender queue depth, in chunks. At ~10ms per chunk this is a
+/// ~320ms ceiling on how far behind real time the send path can fall
+/// before it starts dropping — see where the channel is created.
+const CAPTURE_QUEUE_CHUNKS: usize = 32;
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -80,7 +85,15 @@ async fn run_network(state: Arc<AppState>) {
         }
     };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<CapturedChunk>();
+    // Bounded on purpose. An unbounded queue between a real-time producer
+    // and a slower consumer does not "buffer" — it converts a temporary
+    // stall into permanent latency, because every chunk that piles up is
+    // delay the listener never gets back. Bounding it means a stall costs a
+    // brief dropout instead (see the capture thread's `try_send`), which is
+    // both recoverable and far less annoying than audio drifting steadily
+    // further behind. Sized well above the ~1 chunk that should ever
+    // actually be in flight.
+    let (tx, mut rx) = mpsc::channel::<CapturedChunk>(CAPTURE_QUEUE_CHUNKS);
     match capture::start_capture(tx, state.clone()) {
         Ok(_handle) => info!("audio capture started"),
         Err(e) => warn!(error = %e, "audio capture unavailable on this platform/build"),

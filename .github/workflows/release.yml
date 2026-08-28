@@ -107,6 +107,13 @@ jobs:
       - name: Build
         working-directory: desktop-app
         run: cargo build --release
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+      - name: Build .deb
+        working-directory: desktop-app
+        # --no-build reuses the release binary from the step above rather
+        # than compiling a second time under a different profile.
+        run: cargo deb --no-build
       - name: Package
         run: |
           set -euo pipefail
@@ -120,12 +127,20 @@ jobs:
           # the PipeWire pulse-compat package) already on the system, which
           # is standard on any desktop distro with audio.
           (cd dist && tar -czf "$NAME.tar.gz" "$NAME")
-          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.sha256")
+          # cargo-deb names its output after the crate/package version, not
+          # this workflow's release version — Cargo.toml's `version` is
+          # already checked against the tag in the `version` job above, so
+          # the two always agree; just rename to the same convention as
+          # everything else here.
+          DEB_SRC=$(find desktop-app/target/debian -maxdepth 1 -name '*.deb')
+          cp "$DEB_SRC" "dist/${NAME}.deb"
+          (cd dist && sha256sum "$NAME.tar.gz" "$NAME.deb" > "$NAME.sha256")
       - uses: actions/upload-artifact@v4
         with:
           name: linux
           path: |
             dist/*.tar.gz
+            dist/*.deb
             dist/*.sha256
           if-no-files-found: error
 
@@ -217,7 +232,7 @@ jobs:
             echo
             echo "**Windows:** portable \`.exe\` — no installer, no admin rights. Unsigned, so SmartScreen will warn on first run; verify against \`SHA256SUMS.txt\`."
             echo
-            echo "**Linux:** \`.tar.gz\` containing a single portable binary. Requires PulseAudio or PipeWire's PulseAudio-compatible layer (\`pipewire-pulse\`), standard on any desktop distro with audio."
+            echo "**Linux:** \`.deb\` for apt/dpkg-based distros (Debian, Ubuntu, and derivatives — installs to \`/usr/bin/audio-relay\`, dependencies resolved automatically), or the portable \`.tar.gz\` binary for anything else. Either way requires PulseAudio or PipeWire's PulseAudio-compatible layer (\`pipewire-pulse\`), standard on any desktop distro with audio."
             echo
             echo "**Android:** install the \`.apk\` directly. The \`.aab\` is for Play Store submission and is not installable by hand."
           } >> notes.md

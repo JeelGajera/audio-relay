@@ -30,6 +30,22 @@ enum class ConnectionStatus {
      * `service/RelayService.kt`.
      */
     NETWORK_CHANGED,
+
+    /**
+     * Reconnecting has failed enough times that it is probably not a blip.
+     * Still retrying, but the UI says what to check instead of implying
+     * success is imminent.
+     */
+    CONNECTION_TROUBLE,
+
+    /**
+     * The user deliberately turned the relay off (Home screen switch, or the
+     * notification's Stop action) and [RelayService] has been stopped.
+     * Distinct from [DISCONNECTED], which means a session dropped on its own
+     * and a reconnect is already scheduled — here nothing is running until
+     * the user turns it back on.
+     */
+    STOPPED,
 }
 
 /**
@@ -62,8 +78,15 @@ object RelayState {
     private val _preferredOutputDeviceKey = MutableStateFlow<String?>(null)
     val preferredOutputDeviceKey: StateFlow<String?> = _preferredOutputDeviceKey.asStateFlow()
 
-    private val _jitterTargetDepthChunks = MutableStateFlow(SettingsStore.DEFAULT_JITTER_DEPTH_CHUNKS)
-    val jitterTargetDepthChunks: StateFlow<Int> = _jitterTargetDepthChunks.asStateFlow()
+    private val _jitterTargetDepthMs = MutableStateFlow(SettingsStore.DEFAULT_JITTER_DEPTH_MS)
+    val jitterTargetDepthMs: StateFlow<Int> = _jitterTargetDepthMs.asStateFlow()
+
+    /**
+     * Why the last pairing attempt was refused, if it was — shown on the
+     * code sheet. Null means "no attempt has failed", not "no error type".
+     */
+    private val _pairingError = MutableStateFlow<String?>(null)
+    val pairingError: StateFlow<String?> = _pairingError.asStateFlow()
 
     private val _pairedLaptops = MutableStateFlow<List<PairedLaptop>>(emptyList())
     val pairedLaptops: StateFlow<List<PairedLaptop>> = _pairedLaptops.asStateFlow()
@@ -106,8 +129,12 @@ object RelayState {
         _preferredOutputDeviceKey.value = key
     }
 
-    fun setJitterTargetDepthChunks(chunks: Int) {
-        _jitterTargetDepthChunks.value = chunks
+    fun setJitterTargetDepthMs(ms: Int) {
+        _jitterTargetDepthMs.value = ms
+    }
+
+    fun setPairingError(reason: String?) {
+        _pairingError.value = reason
     }
 
     fun setPairedLaptops(laptops: List<PairedLaptop>) {

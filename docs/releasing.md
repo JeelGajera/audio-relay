@@ -1,9 +1,9 @@
 # Releasing
 
 Releases are cut by pushing a `v*` tag. `.github/workflows/release.yml` does
-the rest: builds the Windows executable, the Linux binary, and the Android
-APK/AAB, generates checksums, and publishes a GitHub Release with notes
-taken from `CHANGELOG.md`.
+the rest: builds the Windows executable, the Linux binary and `.deb`, and
+the Android APK/AAB, generates checksums, and publishes a GitHub Release
+with notes taken from `CHANGELOG.md`.
 
 ## One-time setup: Android signing
 
@@ -67,8 +67,8 @@ so `v0.2.0-rc1` builds correctly from sources declaring `0.2.0`.
 | `audio-relay-<version>-windows-x86_64.zip` | Portable `.exe` plus LICENSE and README |
 | `audio-relay-<version>-windows-x86_64.exe` | The bare executable, for anyone who would rather not unzip |
 | `audio-relay-<version>-linux-x86_64.tar.gz` | Portable binary plus LICENSE and README; requires PulseAudio or PipeWire's `pipewire-pulse` layer, standard on any desktop distro with audio |
+| `audio-relay-<version>-linux-x86_64.deb` | Debian package (built by `cargo deb`, config in `desktop-app/Cargo.toml`'s `[package.metadata.deb]`) for apt/dpkg-based distros — installs to `/usr/bin/audio-relay`, declares its own `libpulse0` dependency so `apt install ./audio-relay-*.deb` pulls it in automatically |
 | `audio-relay-<version>.apk` | Installed directly on a phone |
-| `audio-relay-<version>.aab` | Play Store submission format — **not** installable by hand |
 | `SHA256SUMS.txt` | Checksums for everything above |
 
 ## Known limitations
@@ -76,12 +76,6 @@ so `v0.2.0-rc1` builds correctly from sources declaring `0.2.0`.
 - **The Windows executable is not code-signed.** Authenticode signing needs a
   paid certificate, so SmartScreen warns on first run. The checksums are the
   only integrity check available; point users at them.
-- **No Play Store upload.** The `.aab` is produced so this is a drop-in later
-  (it needs a Play Console account and a service-account JSON), but nothing
-  publishes it today.
 - **No macOS build.** Capture there has no system-audio loopback API without
   a virtual device or a ScreenCaptureKit rewrite. Supporting it is a new
   capture backend, not a packaging change — see `docs/architecture.md` §2.1.
-- **The Linux capture backend is unverified against a real PulseAudio/PipeWire
-  server.** It's only ever been compile- and lint-checked against
-  `libpulse-dev` in CI — see `docs/roadmap.md` Phase 0.

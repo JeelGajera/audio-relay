@@ -23,6 +23,7 @@ import com.audiorelay.app.audio.OutputDeviceRepository
 import com.audiorelay.app.discovery.NsdDiscovery
 import com.audiorelay.app.network.AudioReceiver
 import com.audiorelay.app.network.ControlChannel
+import com.audiorelay.app.network.ControlMessage
 import com.audiorelay.app.network.Crypto
 import com.audiorelay.app.state.ConnectionStatus
 import com.audiorelay.app.state.DiscoveredLaptop
@@ -48,9 +49,10 @@ import kotlinx.coroutines.launch
  * connection lifecycle: discovery, pairing, the control channel, the audio
  * receive/playback pipeline, and applying user settings (output device,
  * jitter buffer depth — see `state/SettingsStore.kt`). Runs with a partial
- * [PowerManager.WakeLock] and a [WifiManager.MulticastLock] so mDNS and the
- * UDP socket keep working with the screen off — see
- * `docs/architecture.md` §3.2.
+ * [PowerManager.WakeLock], a [WifiManager.MulticastLock] and a
+ * [WifiManager.WifiLock] so mDNS and the UDP socket keep working with the
+ * screen off, and so the Wi-Fi radio does not park between beacons and
+ * deliver audio in bursts — see `docs/architecture.md` §3.2.
  *
  * Talks to the UI only through [RelayState] (see that file for why a plain
  * singleton is enough here, rather than a bound-service/Messenger setup).
@@ -68,6 +70,24 @@ class RelayService : Service() {
     private lateinit var discovery: NsdDiscovery
     private lateinit var wakeLock: PowerManager.WakeLock
     private lateinit var multicastLock: WifiManager.MulticastLock
+
+    /**
+     * Keeps Wi-Fi out of power-save for the duration of a session.
+     *
+     * A wake lock keeps the *CPU* awake; it does nothing for the Wi-Fi
+     * radio, which independently parks between beacons and lets the access
+     * point buffer traffic on its behalf. The AP then releases that traffic
+     * in bursts, which for a steady 200 packet/s audio stream means packets
+     * arriving bunched and late rather than evenly — measured on a real
+     * device as ~9% of packets arriving too late to play, buffer depth
+     * swinging between empty and double its target, and a resync every few
+     * seconds. It sounds exactly like a lossy network, but the loss is
+     * local.
+     *
+     * `WIFI_MODE_FULL_LOW_LATENCY` additionally asks the firmware for a
+     * low-latency profile, which is what this workload actually is.
+     */
+    private var wifiLock: WifiManager.WifiLock? = null
     private lateinit var mediaSession: MediaSessionCompat
     private var deviceChangeCallback: AudioDeviceCallback? = null
 
@@ -110,6 +130,19 @@ class RelayService : Service() {
 
         val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         multicastLock = wifiManager.createMulticastLock("$TAG:mdns").apply { setReferenceCounted(false); acquire() }
+        wifiLock = runCatching {
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+            } else {
+                @Suppress("DEPRECATION")
+                WifiManager.WIFI_MODE_FULL_HIGH_PERF
+            }
+            wifiManager.createWifiLock(mode, "$TAG:audio").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.onFailure { Log.w(TAG, "could not acquire a Wi-Fi lock; expect bursty delivery", it) }
+            .getOrNull()
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(null))
@@ -135,7 +168,18 @@ class RelayService : Service() {
                     // accumulated by earlier automatic attempts.
                     reconnectJob?.cancel()
                     reconnectAttempt = 0
-                    connectTo(DiscoveredLaptop(deviceId, name, host, port))
+                    val target = DiscoveredLaptop(deviceId, name, host, port)
+                    // ...nor behind an attempt that is already in flight.
+                    // `connectTo` refuses to start while one is active, so a
+                    // tap on Connect used to do nothing at all whenever an
+                    // automatic attempt was mid-retry — the user saw it
+                    // "connect by itself and keep retrying" instead of being
+                    // asked for a code. Tearing the in-flight one down first
+                    // makes the tap authoritative.
+                    serviceScope.launch {
+                        cancelActiveSession()
+                        connectTo(target)
+                    }
                 }
             }
             ACTION_SUBMIT_PAIRING_CODE -> {
@@ -148,9 +192,9 @@ class RelayService : Service() {
                 activeReceiver?.updatePreferredOutputDevice(key?.let { outputDevices.findByKey(it) })
             }
             ACTION_SET_JITTER_DEPTH -> {
-                val depth = intent.getIntExtra(EXTRA_JITTER_DEPTH, SettingsStore.DEFAULT_JITTER_DEPTH_CHUNKS)
-                settings.jitterTargetDepthChunks = depth
-                RelayState.setJitterTargetDepthChunks(settings.jitterTargetDepthChunks)
+                val depth = intent.getIntExtra(EXTRA_JITTER_DEPTH, SettingsStore.DEFAULT_JITTER_DEPTH_MS)
+                settings.jitterTargetDepthMs = depth
+                RelayState.setJitterTargetDepthMs(settings.jitterTargetDepthMs)
                 // Applies on the next session — rebuilding a live jitter buffer's
                 // depth mid-stream isn't worth the complexity for a setting this
                 // low-frequency; see docs/roadmap.md Phase 5.
@@ -173,13 +217,50 @@ class RelayService : Service() {
                 RelayState.setDynamicColor(enabled)
             }
             ACTION_FORGET_LAPTOP -> {
-                intent.getStringExtra(EXTRA_DEVICE_ID)?.let { store.forgetLaptop(it) }
+                intent.getStringExtra(EXTRA_DEVICE_ID)?.let { forgotten ->
+                    store.forgetLaptop(forgotten)
+                    // If that is the laptop we are connected to right now,
+                    // the session has to end too. Erasing only the stored key
+                    // left the stream running on a key we had just discarded,
+                    // and the next connection attempt would try to reuse a
+                    // session we could no longer prove we owned — so pairing
+                    // never got offered and the app had to be restarted.
+                    // Dropping it now means the next connect starts a clean
+                    // handshake and asks for a code, which is what the user
+                    // just asked for by forgetting it.
+                    if (lastTarget?.deviceId == forgotten) {
+                        lastTarget = null
+                        reconnectJob?.cancel()
+                        reconnectAttempt = 0
+                        serviceScope.launch {
+                            cancelActiveSession()
+                            RelayState.setConnectedDeviceName(null)
+                            startDiscoveryAndAutoConnect()
+                        }
+                    }
+                }
                 refreshPairedLaptops()
             }
             ACTION_STOP -> {
                 suppressReconnect = true
                 reconnectJob?.cancel()
-                stopSelf()
+                // Without this, RelayState keeps whatever status the active
+                // session last set (e.g. STREAMING) — cancelActiveSession's
+                // `finally` skips its own status update while
+                // suppressReconnect is set, so nothing else corrects it. A
+                // stale status is exactly what made this feel broken: the
+                // app looked like it was still relaying after Stop.
+                serviceScope.launch {
+                    cancelActiveSession()
+                    RelayState.setConnectedDeviceName(null)
+                    RelayState.setDiscoveredLaptops(emptyList())
+                    // A pairing prompt left pending here would reappear over
+                    // the next session, attached to a request nothing is
+                    // waiting on any more.
+                    RelayState.setPendingPairingTarget(null)
+                    RelayState.setStatus(ConnectionStatus.STOPPED)
+                    stopSelf()
+                }
             }
         }
         return START_STICKY
@@ -195,6 +276,7 @@ class RelayService : Service() {
         deviceChangeCallback?.let { outputDevices.unregisterChangeCallback(it) }
         runCatching { if (wakeLock.isHeld) wakeLock.release() }
         runCatching { if (multicastLock.isHeld) multicastLock.release() }
+        runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
         mediaSession.isActive = false
         mediaSession.release()
         // Cancels connectJob, reconnectJob and networkChangeJob together —
@@ -207,7 +289,7 @@ class RelayService : Service() {
 
     private fun publishSettingsState() {
         RelayState.setPreferredOutputDeviceKey(settings.preferredOutputDeviceKey)
-        RelayState.setJitterTargetDepthChunks(settings.jitterTargetDepthChunks)
+        RelayState.setJitterTargetDepthMs(settings.jitterTargetDepthMs)
         RelayState.setThemeMode(settings.themeMode)
         RelayState.setDynamicColor(settings.dynamicColor)
     }
@@ -254,7 +336,13 @@ class RelayService : Service() {
         reconnectJob = serviceScope.launch {
             val delayMs = ReconnectBackoff.delayMsFor(reconnectAttempt)
             reconnectAttempt++
-            RelayState.setStatus(ConnectionStatus.RECONNECTING)
+            RelayState.setStatus(
+                if (reconnectAttempt > ATTEMPTS_BEFORE_HELP) {
+                    ConnectionStatus.CONNECTION_TROUBLE
+                } else {
+                    ConnectionStatus.RECONNECTING
+                },
+            )
             Log.i(TAG, "reconnecting to ${target.name} in ${delayMs}ms (attempt $reconnectAttempt)")
             delay(delayMs)
             connectTo(target)
@@ -265,6 +353,15 @@ class RelayService : Service() {
     private suspend fun cancelActiveSession() {
         suppressReconnect = true
         try {
+            // Close the receiver *before* joining, not just inside the job's
+            // own `finally`. The playback loop is normally parked inside
+            // `AudioTrack.write`, which is not a cancellable suspension
+            // point — and if AudioFlinger has evicted the track, that write
+            // never returns at all. Waiting for the job first therefore hung
+            // forever, which is why stopping the relay sometimes did
+            // nothing. Closing here releases the track and the socket, which
+            // is what actually unblocks both loops so the join can complete.
+            activeReceiver?.close()
             connectJob?.cancelAndJoin()
             connectJob = null
         } finally {
@@ -368,6 +465,43 @@ class RelayService : Service() {
         startDiscoveryAndAutoConnect(ConnectionStatus.NETWORK_CHANGED)
     }
 
+    /**
+     * Prompts for the pairing code and submits it, re-prompting if the
+     * laptop rejects it.
+     *
+     * A mistyped digit must not cost the whole connection: without this the
+     * rejection tore the session down and went back to the reconnect
+     * backoff, so the user's next attempt was a fresh connection rather
+     * than a second try at the prompt still in front of them.
+     */
+    private suspend fun pairInteractively(
+        channel: ControlChannel,
+        laptop: DiscoveredLaptop,
+        ack: ControlMessage.HelloAck,
+    ): ControlChannel.Paired {
+        var lastRejection: String? = null
+        // The laptop allows a bounded number of attempts per connection;
+        // stay under it so the last try still gets a real answer.
+        repeat(MAX_PAIRING_CODE_ATTEMPTS) {
+            RelayState.setPairingError(lastRejection)
+            RelayState.setStatus(ConnectionStatus.PAIRING_CODE_REQUIRED)
+            RelayState.setPendingPairingTarget(laptop)
+            val deferred = CompletableDeferred<String>()
+            pendingPairingCode = deferred
+            val code = deferred.await()
+            try {
+                val paired = channel.pairWithCode(code, ack.nonce, ack.device_id, ack.device_name)
+                RelayState.setPairingError(null)
+                return paired
+            } catch (e: ControlChannel.PairingRejected) {
+                Log.w(TAG, "pairing code rejected: ${e.message}")
+                lastRejection = e.message
+            }
+        }
+        RelayState.setPairingError(null)
+        throw ControlChannel.PairingRejected("too many incorrect pairing codes")
+    }
+
     /** Also called directly by the UI when the user picks a device from the list. */
     fun connectTo(laptop: DiscoveredLaptop) {
         if (connectJob?.isActive == true) return
@@ -390,17 +524,34 @@ class RelayService : Service() {
                 ).also { channel = it }
 
                 val ack = activeChannel.connect()
-                val paired = if (ack.paired) {
-                    val saved = store.getSavedLaptop(ack.device_id)
-                        ?: error("laptop reports us as paired but we have no saved key for it")
-                    activeChannel.repair(ack.device_id, ack.device_name, Crypto.hexToBytes(saved.sessionKeyHex), ack.nonce)
+                // `ack.paired` (the laptop's own memory of us) and having a
+                // locally-saved key are independent facts — "Forget" on
+                // this phone only touches this phone's storage, so a laptop
+                // we forgot still reports us as paired. Falling back to the
+                // pairing-code flow whenever we don't actually have a key,
+                // regardless of what the laptop claims, is what lets this
+                // self-heal with a fresh code instead of retrying a REPAIR
+                // that can never succeed.
+                val savedLaptop = if (ack.paired) store.getSavedLaptop(ack.device_id) else null
+                val paired = if (savedLaptop != null) {
+                    try {
+                        activeChannel.repair(ack.device_id, ack.device_name, Crypto.hexToBytes(savedLaptop.sessionKeyHex), ack.nonce)
+                    } catch (e: ControlChannel.PairingRejected) {
+                        // The laptop refused the key we had stored for it, so
+                        // that key is stale and no amount of retrying will
+                        // make it work. Discard it and pair properly instead
+                        // — on this same connection, which the laptop still
+                        // accepts a pairing attempt on. Retrying it as though
+                        // it were a network blip is what used to leave the
+                        // phone reconnecting forever while the laptop sat
+                        // there displaying a code nobody was ever asked for.
+                        Log.w(TAG, "stored key rejected (${e.message}); pairing again", e)
+                        store.forgetLaptop(ack.device_id)
+                        refreshPairedLaptops()
+                        pairInteractively(activeChannel, laptop, ack)
+                    }
                 } else {
-                    RelayState.setStatus(ConnectionStatus.PAIRING_CODE_REQUIRED)
-                    RelayState.setPendingPairingTarget(laptop)
-                    val deferred = CompletableDeferred<String>()
-                    pendingPairingCode = deferred
-                    val code = deferred.await()
-                    activeChannel.pairWithCode(code, ack.nonce, ack.device_id, ack.device_name)
+                    pairInteractively(activeChannel, laptop, ack)
                 }
                 pendingPairingCode = null
                 RelayState.setPendingPairingTarget(null)
@@ -413,7 +564,7 @@ class RelayService : Service() {
                     sessionId = paired.sessionId,
                     sampleRateHz = paired.sampleRateHz,
                     channels = paired.channels,
-                    jitterTargetDepthChunks = settings.jitterTargetDepthChunks,
+                    jitterTargetDepthMs = settings.jitterTargetDepthMs,
                     preferredOutputDevice = preferredDevice,
                 )
                 RelayState.setStatus(ConnectionStatus.STREAMING)
@@ -442,6 +593,7 @@ class RelayService : Service() {
                 // screen forever with nothing behind it.
                 pendingPairingCode = null
                 RelayState.setPendingPairingTarget(null)
+                RelayState.setPairingError(null)
                 RelayState.setConnectedDeviceName(null)
                 updateNotification(null)
                 // When we cancelled this session ourselves (network change,
@@ -512,6 +664,22 @@ class RelayService : Service() {
          */
         private const val NETWORK_CHANGE_DEBOUNCE_MS = 750L
 
+        /**
+         * Tries at the pairing prompt per connection. The laptop allows a
+         * few per connection; staying under that means the final attempt
+         * still gets a real answer rather than the connection dying first.
+         */
+        private const val MAX_PAIRING_CODE_ATTEMPTS = 3
+
+        /**
+         * Failed reconnects before the UI stops saying "retrying shortly"
+         * and starts telling the user what to actually check. Retrying
+         * continues underneath — a laptop that is merely asleep should
+         * still be picked up — but silently looping forever with no
+         * explanation is what made this infuriating to sit in front of.
+         */
+        private const val ATTEMPTS_BEFORE_HELP = 4
+
         const val ACTION_CONNECT = "com.audiorelay.app.action.CONNECT"
         const val ACTION_SUBMIT_PAIRING_CODE = "com.audiorelay.app.action.SUBMIT_PAIRING_CODE"
         const val ACTION_SET_OUTPUT_DEVICE = "com.audiorelay.app.action.SET_OUTPUT_DEVICE"
@@ -527,7 +695,7 @@ class RelayService : Service() {
         const val EXTRA_PORT = "port"
         const val EXTRA_CODE = "code"
         const val EXTRA_DEVICE_KEY = "device_key"
-        const val EXTRA_JITTER_DEPTH = "jitter_depth"
+        const val EXTRA_JITTER_DEPTH = "jitter_depth_ms"
         const val EXTRA_THEME_MODE = "theme_mode"
         const val EXTRA_DYNAMIC_COLOR = "dynamic_color"
     }

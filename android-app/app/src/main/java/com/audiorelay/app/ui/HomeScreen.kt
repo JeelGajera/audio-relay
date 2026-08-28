@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,6 +29,7 @@ import com.audiorelay.app.state.DiscoveredLaptop
 import com.audiorelay.app.state.RelayState
 import com.audiorelay.app.ui.components.LevelVisualizer
 import com.audiorelay.app.ui.components.SectionCard
+import com.audiorelay.app.ui.components.SettingRow
 import com.audiorelay.app.ui.components.StatusPill
 import com.audiorelay.app.ui.theme.LocalStatusColors
 
@@ -36,19 +38,25 @@ fun HomeScreen(
     onSelectLaptop: (DiscoveredLaptop) -> Unit,
     onSubmitPairingCode: (String) -> Unit,
     onCancelPairing: () -> Unit,
+    onToggleRelay: (Boolean) -> Unit,
 ) {
     val status by RelayState.status.collectAsStateWithLifecycle()
     val connectedDeviceName by RelayState.connectedDeviceName.collectAsStateWithLifecycle()
     val discoveredLaptops by RelayState.discoveredLaptops.collectAsStateWithLifecycle()
     val pendingPairingTarget by RelayState.pendingPairingTarget.collectAsStateWithLifecycle()
     val playbackLevel by RelayState.playbackLevel.collectAsStateWithLifecycle()
+    val pairingError by RelayState.pairingError.collectAsStateWithLifecycle()
 
     val statusColors = LocalStatusColors.current
     val pillColor = when (status) {
         ConnectionStatus.STREAMING -> statusColors.streaming
-        ConnectionStatus.DISCONNECTED, ConnectionStatus.NETWORK_CHANGED -> statusColors.warning
+        ConnectionStatus.DISCONNECTED,
+        ConnectionStatus.NETWORK_CHANGED,
+        ConnectionStatus.CONNECTION_TROUBLE,
+        -> statusColors.warning
         else -> MaterialTheme.colorScheme.primary
     }
+    val relayEnabled = status != ConnectionStatus.STOPPED
 
     Column(
         modifier = Modifier
@@ -57,6 +65,22 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Box(Modifier.padding(top = 24.dp))
+
+        // The primary control for this screen: stopping used to only be
+        // reachable from the notification, and (before a related fix)
+        // didn't even update this screen when you did. This is the one
+        // on-screen place that both shows and controls whether the relay
+        // is running at all.
+        SectionCard {
+            SettingRow(
+                title = stringResource(R.string.home_relay_toggle_title),
+                subtitle = stringResource(
+                    if (relayEnabled) R.string.home_relay_toggle_hint_on else R.string.home_relay_toggle_hint_off,
+                ),
+            ) {
+                Switch(checked = relayEnabled, onCheckedChange = onToggleRelay)
+            }
+        }
 
         Text(
             text = stringResource(headlineFor(status)),
@@ -80,6 +104,13 @@ fun HomeScreen(
             }
         }
 
+        AnimatedVisibility(visible = status == ConnectionStatus.CONNECTION_TROUBLE) {
+            SectionCard(
+                title = stringResource(R.string.home_trouble_title),
+                subtitle = stringResource(R.string.home_trouble_hint),
+            ) {}
+        }
+
         AnimatedVisibility(visible = status.showsDeviceList()) {
             DiscoveredLaptops(discoveredLaptops, onSelectLaptop)
         }
@@ -91,6 +122,7 @@ fun HomeScreen(
             laptopName = pairingTarget.name,
             onSubmit = onSubmitPairingCode,
             onDismiss = onCancelPairing,
+            rejected = pairingError != null,
         )
     }
 }
@@ -100,6 +132,7 @@ private fun ConnectionStatus.showsDeviceList(): Boolean = when (this) {
     ConnectionStatus.DISCOVERING,
     ConnectionStatus.CONNECTING,
     ConnectionStatus.NETWORK_CHANGED,
+    ConnectionStatus.CONNECTION_TROUBLE,
     -> true
     else -> false
 }
@@ -109,6 +142,8 @@ private fun headlineFor(status: ConnectionStatus): Int = when (status) {
     ConnectionStatus.PAIRING_CODE_REQUIRED -> R.string.home_headline_pairing
     ConnectionStatus.DISCONNECTED, ConnectionStatus.RECONNECTING -> R.string.home_headline_reconnecting
     ConnectionStatus.NETWORK_CHANGED -> R.string.home_headline_network_changed
+    ConnectionStatus.STOPPED -> R.string.home_headline_stopped
+    ConnectionStatus.CONNECTION_TROUBLE -> R.string.home_headline_trouble
     else -> R.string.home_headline_looking
 }
 
@@ -121,6 +156,8 @@ private fun statusLabelFor(status: ConnectionStatus): Int = when (status) {
     ConnectionStatus.DISCONNECTED -> R.string.status_disconnected
     ConnectionStatus.RECONNECTING -> R.string.status_reconnecting
     ConnectionStatus.NETWORK_CHANGED -> R.string.status_network_changed
+    ConnectionStatus.STOPPED -> R.string.status_stopped
+    ConnectionStatus.CONNECTION_TROUBLE -> R.string.status_connection_trouble
 }
 
 @Composable

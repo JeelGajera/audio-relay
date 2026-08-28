@@ -35,6 +35,17 @@ pub struct Config {
     /// earlier versions still load.
     #[serde(default)]
     pub appearance: crate::ui::Appearance,
+    /// Whether this laptop's own output should keep playing while streaming
+    /// to a phone. `#[serde(default)]` so older config files load with the
+    /// behavior they already had — this laptop's audio always played
+    /// locally, since loopback capture never touched local playback — as
+    /// the default rather than silently muting existing users on upgrade.
+    #[serde(default = "default_play_locally_while_relaying")]
+    pub play_locally_while_relaying: bool,
+}
+
+fn default_play_locally_while_relaying() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -43,6 +54,7 @@ impl Default for Config {
             device_id: Uuid::new_v4().to_string(),
             paired_devices: HashMap::new(),
             appearance: crate::ui::Appearance::default(),
+            play_locally_while_relaying: default_play_locally_while_relaying(),
         }
     }
 }

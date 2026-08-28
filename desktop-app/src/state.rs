@@ -98,6 +98,11 @@ pub struct AppState {
     /// Capture keeps running regardless; this only controls transmission,
     /// so toggling it back on doesn't need to re-negotiate anything.
     streaming_enabled: AtomicBool,
+    /// Runtime-cached copy of `config.play_locally_while_relaying`, read
+    /// live by the capture loop every chunk (see `capture::mod`'s
+    /// `apply_local_mute`) the same way `latency_mode` is — cheap to check,
+    /// and avoids the capture thread taking `config`'s lock at audio rate.
+    play_locally_while_relaying: AtomicBool,
     latency_mode: AtomicU8,
     /// Devices found on the last capture-thread enumeration. UI-only reads;
     /// never written from the UI thread (see `CaptureDeviceInfo`'s doc).
@@ -119,12 +124,14 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(config: Config) -> Arc<Self> {
+        let play_locally_while_relaying = config.play_locally_while_relaying;
         Arc::new(AppState {
             config: Mutex::new(config),
             pairing: Mutex::new(PairingState::default()),
             session: Mutex::new(None),
             status: Mutex::new(ConnectionStatus::WaitingForConnection),
             streaming_enabled: AtomicBool::new(true),
+            play_locally_while_relaying: AtomicBool::new(play_locally_while_relaying),
             latency_mode: AtomicU8::new(LatencyMode::Balanced as u8),
             available_capture_devices: Mutex::new(Vec::new()),
             selected_capture_device_id: Mutex::new(None),
@@ -159,6 +166,27 @@ impl AppState {
 
     pub fn set_latency_mode(&self, mode: LatencyMode) {
         self.latency_mode.store(mode as u8, Ordering::Relaxed);
+    }
+
+    /// Read live by the capture loop (`capture::mod`'s `apply_local_mute`)
+    /// every chunk to decide whether this laptop's own output should be
+    /// muted while relaying — see `LatencyMode`'s doc for why this lives as
+    /// an atomic rather than behind `config`'s lock.
+    #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+    pub fn play_locally_while_relaying(&self) -> bool {
+        self.play_locally_while_relaying.load(Ordering::Relaxed)
+    }
+
+    /// Updates only the live value the capture loop reads. Persisting to
+    /// `config` is the caller's job (see `ui/settings.rs`'s handler, which
+    /// follows the same read-mutate-save-config pattern
+    /// `paired_devices_card`'s "Forget" button uses) — kept out of here so
+    /// `AppState` methods stay disk-I/O-free and safe to call from a unit
+    /// test without touching the real config path, same as every other
+    /// setter on this type.
+    pub fn set_play_locally_while_relaying(&self, enabled: bool) {
+        self.play_locally_while_relaying
+            .store(enabled, Ordering::Relaxed);
     }
 
     pub fn selected_capture_device_id(&self) -> Option<String> {
@@ -325,6 +353,14 @@ mod tests {
         state.set_latency_mode(LatencyMode::Low);
         assert_eq!(state.latency_mode(), LatencyMode::Low);
         assert_eq!(state.latency_mode().chunk_ms(), 5);
+    }
+
+    #[test]
+    fn play_locally_while_relaying_defaults_on_and_round_trips() {
+        let state = AppState::new(Config::default());
+        assert!(state.play_locally_while_relaying());
+        state.set_play_locally_while_relaying(false);
+        assert!(!state.play_locally_while_relaying());
     }
 
     #[test]

@@ -57,6 +57,7 @@ fun AudioRelayApp(
     onForgetLaptop: (String) -> Unit,
     onSetThemeMode: (ThemeMode) -> Unit,
     onSetDynamicColor: (Boolean) -> Unit,
+    onToggleRelay: (Boolean) -> Unit,
 ) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -110,6 +111,7 @@ fun AudioRelayApp(
                     onSelectLaptop = onSelectLaptop,
                     onSubmitPairingCode = onSubmitPairingCode,
                     onCancelPairing = onCancelPairing,
+                    onToggleRelay = onToggleRelay,
                 )
             }
             composable(Destination.SETTINGS.route) {

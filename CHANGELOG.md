@@ -2,170 +2,278 @@
 
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
-follows [Semantic Versioning](https://semver.org/) once it has a first
-tagged release.
+follows [Semantic Versioning](https://semver.org/) starting with this first
+tagged release. Future releases will list changes *relative to* the
+previous tag, the normal way — this entry is different on purpose: there is
+no previous release to diff against, so instead of a changelog it's a
+feature manifest of what `v0.1.0` actually ships.
 
-## [Unreleased]
+## [0.1.0] - 2026-08-28 - Initial release
 
-### Security
+### What it does
 
-- **Protocol v2**: the pairing code is no longer sent over the wire.
-  `PAIR_REQUEST` previously carried the raw code in cleartext, letting a
-  passive LAN eavesdropper recompute the session key from that one packet.
-  It now carries an `HMAC-SHA256(code, phone_device_id || nonce)` proof
-  instead — a fresh nonce from every `HELLO_ACK` — and both sides derive
-  the session key locally via HKDF once the laptop verifies the proof, so
-  the code and the key itself never cross the network. This also fixes a
-  correctness bug where `PAIR_OK` never actually carried the session key it
-  was supposed to on first pairing, which meant pairing could not
-  previously complete. See `protocol-spec.md` §5 for the updated flow.
-- Repair-flow proof verification (`verify_repair_proof`) now uses a
-  constant-time comparison (`subtle::ConstantTimeEq`) instead of `==` on
-  hex strings, closing a timing side-channel on the laptop side.
+A two-sided relay: a desktop app (Windows via WASAPI loopback, Linux via
+PulseAudio/PipeWire monitor-source capture) captures system audio and
+streams it over the local network to an Android app, which plays it back
+through whatever Bluetooth device is already connected. No admin rights, no
+virtual audio driver, no cloud service — see
+[`docs/architecture.md`](docs/architecture.md) for the full rationale.
 
-### Added
+### Desktop app (`desktop-app`, Rust)
 
-- **Linux desktop support.** `desktop-app` gains `capture::linux_impl`: a
-  PulseAudio Simple API backend that records from the selected output
-  sink's `.monitor` source — the same "record what you hear" trick as
-  WASAPI loopback, PulseAudio's version of it. Transparently covers
-  PipeWire distros too, through PipeWire's `pipewire-pulse`
-  compatibility layer, so there's no separate PipeWire-specific code path.
-  Device enumeration and default-sink resolution go through
-  `libpulse-binding`'s introspection API; the actual capture uses
-  `libpulse-simple-binding`'s blocking `read()`. Requests a fixed 48kHz
-  stereo S16LE stream (PulseAudio resamples internally), so unlike the
-  Windows backend it never needs to map an arbitrary endpoint rate onto
-  the protocol's two supported sample rates. **Unverified against a real
-  PulseAudio/PipeWire server** — see `docs/roadmap.md` Phase 0. Requires
-  `libpulse-dev` (or your distro's equivalent) at build time.
-- **A real design system on both apps.** `desktop-app` moves off stock egui
-  (default font, permanently light, three plain tabs, no icon, a console
-  window behind it) onto `ui/theme.rs` and `ui/widgets.rs`: semantic colour
-  roles in matched dark/light ramps, a left nav rail, an animated toggle, a
-  status pill that breathes while streaming, per-digit pairing-code boxes, a
-  live output level meter, a generated app icon embedded in the `.exe`, a
-  Windows 11 Mica backdrop with the system accent colour, and Segoe UI loaded
-  from the system. `android-app` moves off a bare `MaterialTheme {}` — which
-  meant the baseline light palette permanently, even on a phone in dark mode
-  — onto a full theme package with Material You dynamic colour, edge-to-edge,
-  a splash screen, a NavHost, a bottom-sheet output-device picker, an
-  appearance setting, and an animated level visualiser.
-- **Release pipeline** (`docs/releasing.md`): a `v*` tag builds a portable
-  Windows `.exe`, a Linux `.tar.gz`, and a signed Android APK/AAB with
-  SHA256 checksums and release notes taken from this file. Rehearsable via
-  `workflow_dispatch` before a tag exists.
-- **Android toolchain upgrade** to AGP 9.3.2 / Gradle 9.7.1 / Kotlin 2.4.10 /
-  Compose BOM 2026.08.00, `compileSdk` and `targetSdk` 36, with all versions
-  consolidated into `gradle/libs.versions.toml`. Release builds now minify
-  and shrink resources.
-- **Clock-drift correction** (roadmap Phase 5): the receiver now acts on each
-  packet's `timestamp_ms`. Sender and receiver clocks are never exactly
-  equal, so over a long session the jitter buffer used to leak one way —
-  filling until it dropped a whole chunk, or draining into permanent
-  concealment silence. Buffer depth is now regulated back to the target by
-  dropping or duplicating a single PCM frame at a time (~21µs, inaudible;
-  a whole-chunk correction is the ~10ms click this avoids), with a deadband
-  and rate limit so ordinary network jitter provokes no correction at all.
-- **Network-change handling** (roadmap Phase 4): a `ConnectivityManager`
-  default-network callback tears down the session and restarts NSD discovery
-  when the phone moves between networks — Wi-Fi to hotspot, SSID switch, or a
-  DHCP renewal onto a different subnet — instead of waiting for three
-  heartbeats to time out. Debounced, so one transition causes one restart.
-  Shown in the UI as its own status rather than a generic disconnect.
-- **Reconnect backoff supervision**: a dropped session now schedules its own
-  retry (1s doubling to a 30s ceiling, reset by a successful stream or a
-  network change). Previously reconnection depended entirely on NSD choosing
-  to re-announce the service, which it has no obligation to do — so a dropped
-  connection could simply never recover.
+- Loopback capture on Windows (WASAPI) and Linux (PulseAudio Simple API,
+  transparently covering PipeWire distros through `pipewire-pulse`) —
+  pick which output device to relay, or leave it on the system default.
+  Falls back to the system default automatically if the selected device
+  disappears (e.g. a Bluetooth speaker gets disconnected), rather than
+  retrying a device that no longer exists.
+- **"Also play locally while relaying"** — on by default (this laptop's own
+  output keeps playing, same as before); turn it off to mute this laptop
+  while streaming, so only the phone plays it.
+- Low/Balanced latency mode (~5ms vs ~10ms capture chunks), changeable live.
+- mDNS advertisement, TCP control channel (pairing, heartbeat, reconnect),
+  UDP audio streaming, TOML config persistence.
+- A pairing code is always visible whenever nothing is actively streaming —
+  including after a disconnect, not just on first launch — so recovering
+  from a stale pairing (a different phone, or one that forgot this laptop)
+  never requires restarting the app.
+- Full design system: left nav rail, dark/light/system appearance, a
+  breathing status pill while streaming, a live output level meter,
+  per-digit pairing-code boxes, a Windows 11 Mica backdrop with the system
+  accent colour, an embedded app icon, and a licenses page grouped by
+  license rather than a raw per-crate table.
+- Packaged as a portable binary — no installer, no admin/root. Windows gets
+  a `.exe`; Linux gets both a plain binary (`.tar.gz`) and an installable
+  `.deb`.
 
-- Project scaffolding: contribution/governance docs (`AGENTS.md`,
-  `CLAUDE.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`),
-  architecture and roadmap docs, CI workflows.
-- `protocol-spec.md`: canonical UDP audio packet format and TCP control
-  message schema.
-- `desktop-app`: WASAPI loopback capture, packetizer, mDNS advertise, TCP
-  control channel with pairing handshake + heartbeat, UDP audio sender,
-  ChaCha20-Poly1305 payload encryption, TOML config persistence.
-- `android-app`: NSD discovery, TCP control channel client, UDP receiver
-  with sequence-aware jitter buffer and packet-loss concealment,
-  low-latency `AudioTrack` playback via `USAGE_MEDIA`, foreground service
-  with wake lock + multicast lock.
-- Configurable UI on both sides, three screens each (Home / Settings /
-  About): pick which output device audio is captured from (Windows) or
-  played to (Android — Bluetooth/wired/USB/speaker, or automatic), tune
-  latency/jitter-buffer depth, manage paired devices, and an About screen
-  with version, build commit/date, GitHub link, and license/third-party
-  info on both apps.
+### Android app (`android-app`, Kotlin/Compose)
 
-### Changed
+- NSD (mDNS) discovery, TCP control channel, UDP receiver with a
+  sequence-aware jitter buffer (loss concealed with a brief fade to silence,
+  not a repeated chunk) and timestamp-based clock-drift correction, so
+  latency stays put over a long session instead of slowly creeping as the
+  two clocks diverge.
+- Low-latency `AudioTrack` playback (`USAGE_MEDIA`) — Android's normal
+  routing sends it to whichever Bluetooth/wired/USB device (or the phone
+  speaker) is already active, or a specific one you pick in Settings.
+- A **Start/Stop switch right on the Home screen** — not just the
+  notification's Stop action, which used to be the only way to stop it
+  without force-closing the app.
+- Foreground service with a wake lock and multicast lock, so discovery and
+  playback keep working with the screen off; auto-reconnect with backoff on
+  a dropped session, and automatic re-discovery when the phone changes
+  networks (Wi-Fi to hotspot, a new SSID, a DHCP renewal onto a different
+  subnet).
+- Forgetting a paired laptop is handled properly end-to-end: it clears the
+  auto-reconnect pointer too (not just the saved key), and if the laptop
+  still thinks you're paired but you no longer have its key, the app falls
+  back to asking for a fresh pairing code instead of retrying a reconnect
+  that could never succeed.
+- Material You dynamic colour, a real dark mode, edge-to-edge, a splash
+  screen, an animated level visualiser, and a licenses page grouped by
+  license.
 
-- **Renamed `windows-app` to `desktop-app`** (crate name
-  `audio-relay-windows` → `audio-relay-desktop`), since it's no longer
-  Windows-only now that a Linux capture backend exists. Platform-specific
-  code stays isolated in `capture::windows_impl`/`capture::linux_impl`.
+### Relay reliability
+
+Defects found during real-device testing, each of which independently
+degraded or killed the one thing this app exists to do. All are covered by
+regression tests or by a measurement probe:
+
+- **Capture arrived in bursts, not as a stream (Linux).** The single worst
+  defect in the project. `pa_simple_new` was given no `BufferAttr`, so
+  PulseAudio chose its default fragment size — documented as "something
+  like 2s". Measured against a real PipeWire server: 194 of every 200 reads
+  returned instantly, then the stream **stalled for 341ms**. Audio was
+  therefore delivered as ~34 chunks at once followed by a third of a second
+  of nothing, which no reasonable jitter buffer can hide, and which dumped
+  tens of UDP packets into the network at once for a hotspot to drop. With
+  an explicit fragment size the median gap is 10.65ms and the worst case
+  11.11ms. The `capture_delivery_cadence` probe measures this on demand.
+- **Windows: a silent second tore down the capture stream.** A WASAPI
+  loopback stream only raises events while the endpoint is actually
+  rendering, so with nothing playing the event wait times out — which the
+  code treated as a failure and answered by rebuilding the whole stream,
+  COM device enumeration included, every single second, clipping the start
+  of whatever played next. Silence is this app's resting state; it is now
+  handled as such.
+- **Windows: the capture buffer had no headroom.** `IAudioClient::Initialize`
+  was given the hardware *minimum* period as its buffer capacity. Shared
+  mode runs at the engine's *default* period, and the minimum only applies
+  to exclusive mode, which loopback cannot use — so the buffer was smaller
+  than a single engine period and any late read overran it.
+- **The jitter buffer was configured in packets, so it was ~18ms deep.**
+  Buffer depth is now set in milliseconds (default 120ms, adjustable 30–400ms)
+  and converted to packets against the size actually observed on the wire.
+  Counting packets tied the setting to how the sender happened to be
+  packetising: the shipped default of "3 chunks" meant ~18ms, and even the
+  maximum setting only reached ~36ms — well under normal Wi-Fi jitter, let
+  alone a phone hotspot.
+- **The capture→sender queue was unbounded.** An unbounded queue between a
+  real-time producer and a slower consumer does not buffer, it accumulates
+  — every queued chunk is delay that never comes back. It is now bounded
+  and drops to stay current, so a stall costs a brief dropout instead of
+  permanent lag.
+- **The level meter ran on the audio path.** RMS was computed and pushed
+  into a `StateFlow` once per packet — ~165 times a second — driving that
+  many Compose recompositions on a deadline-sensitive loop. Now throttled
+  to ~25/s.
+- **Session teardown resurrected the audio track, leaking one per
+  reconnect.** `close()` releases the `AudioTrack` while the playback loop
+  is blocked inside `write` — that release is what unblocks it — so the
+  resulting `IllegalStateException` was indistinguishable from a track
+  dying mid-session, and the recovery path rebuilt it. Teardown therefore
+  quietly revived what it was tearing down: the loop never exited, kept
+  animating the visualiser with no audio, could not be stopped, and left
+  behind a live `AudioTrack` playing silence plus a permanently blocked
+  thread. Every reconnect leaked another, which is why playback got
+  progressively choppier the longer the app ran and only a restart helped.
+  Shutdown is now explicit and terminal.
+- **A zero-length write counted as success.** `AudioTrack.write` returns 0
+  when it accepted nothing — a track that is not playing — and returns it
+  immediately, so the playback loop spun at CPU speed. That pegged a core
+  (the UI going unresponsive) and, because each iteration also advances the
+  jitter buffer's expected sequence, raced playback past the sender until
+  it desynced into silence.
+- **Playback health is now logged** every 10s (`adb logcat -s AudioRelay`):
+  buffer depth against target, concealment percentage, late packets,
+  resyncs, latency trims and measured clock drift. Choppiness has several
+  possible causes that sound identical from the outside, and this is what
+  distinguishes real packet loss from a starved buffer or a misfiring
+  correction.
+- **Uneven MTU splitting caused periodic chopping.** Splitting a 1920-byte
+  chunk as `[1168, 752]` meant packet sizes alternated on the wire. The
+  receiver infers packet duration from the packets it receives — nothing in
+  the protocol tells it — and sizes its target depth, concealment length and
+  latency-trim threshold from that, so all three oscillated packet to
+  packet: the target swung between 20 and 31 chunks. Depth sitting normally
+  at 31 was then read as backlog the moment a large packet arrived, and the
+  latency trim discarded ~11 packets of good audio. Audible as a small cut
+  every few seconds against otherwise clean playback. Chunks are now split
+  into equal packets, and the receiver additionally requires a new packet
+  size to repeat before adopting it, so no future packetisation can
+  reintroduce the oscillation.
+- **Accumulated backlog became permanent latency.** Any transient stall —
+  a descheduled receive loop, a burst of Wi-Fi retransmits — queued audio
+  that nothing ever shed, leaving playback running seconds behind live for
+  the rest of the session. The drift correction cannot fix this: it moves
+  one ~21µs PCM frame per ten packets, so draining 200ms of excess would
+  take about ten minutes. The jitter buffer now detects standing depth well
+  above its target and skips forward to the configured depth, trading one
+  brief discontinuity for correct latency from then on. The UDP receive
+  buffer was also sized down, since audio queued in the kernel is latency
+  the receiver cannot see or correct.
+- **A refused pairing key was retried forever instead of re-pairing.** The
+  worst of the pairing defects. When the laptop rejected the phone's stored
+  key, that arrived as an ordinary `IOException` — indistinguishable from a
+  dropped connection — so the reconnect supervisor retried it on a backoff,
+  with the same stale key, indefinitely. The laptop meanwhile sat showing a
+  pairing code that the phone never asked anyone to type. There was no
+  escape from the loop short of clearing app data. A refusal is now a
+  distinct, permanent outcome: the stale key is discarded and pairing
+  restarts on the same connection, prompting for the code.
+- **A mistyped code cost the whole connection.** Rejection tore the session
+  down and dropped back into the reconnect backoff, so the next try was a
+  fresh connection rather than another go at the prompt already on screen.
+  The prompt now re-asks in place, up to a few attempts, and says the code
+  was refused instead of failing silently.
+- **Endless retrying now explains itself.** After several failed attempts
+  the UI stops implying success is imminent and says what to check — both
+  apps open, same Wi-Fi, guest networks usually blocked — while continuing
+  to retry underneath, and offers the laptop list so the user can act.
+- **Forgetting a device left its session running.** On both sides:
+  forgetting erased the stored key but not the live connection, so audio
+  kept flowing over a key that had just been revoked. The laptop stayed in
+  "Streaming" and therefore never displayed a pairing code, and the phone
+  kept trying to resume a session it could no longer prove it owned — so
+  pairing was never offered and the only way back was restarting both apps.
+  Forgetting now ends the session on whichever side it happens, and the
+  peer is dropped through a fresh handshake that correctly asks for a code.
+- **An explicit Connect tap could be silently ignored.** `connectTo`
+  refuses to start while an attempt is in flight, so tapping Connect during
+  an automatic retry did nothing — which read as the app connecting by
+  itself and retrying forever instead of prompting. A user tap now preempts
+  whatever is in flight.
+- **Small robustness gaps:** the UDP receive socket used the OS default
+  buffer (a short burst overflowed it, dropping audio in the kernel where
+  the jitter buffer's loss handling could not see it), and `AudioTrack` was
+  allocated at exactly `getMinBufferSize`, leaving no tolerance for a late
+  write.
+
+- **Every audio packet was IP-fragmented.** A 10ms chunk of 48kHz stereo
+  16-bit PCM is 1920 bytes, which with the header and auth tag made a
+  1949-byte datagram — well over the 1472-byte limit for UDP over a normal
+  1500-byte MTU. Every packet therefore travelled as two IP fragments, and
+  losing either one lost the whole packet, roughly doubling the effective
+  loss rate. On a phone hotspot, where loss is already common, this is the
+  "song keeps cutting out" symptom. The sender now splits a captured chunk
+  across as many MTU-safe packets as it takes
+  (`packet::MAX_DATAGRAM_BYTES`); each is independently sequenced, so no
+  protocol change was needed.
+- **Playback could wedge permanently.** If the play position ever ran past
+  the sender, the jitter buffer classified every subsequent packet as
+  "too late" and discarded it — forever. Audio went silent while the
+  desktop kept capturing and transmitting normally, and only restarting the
+  app recovered it. The buffer now detects both a wildly-diverged sequence
+  position and sustained starvation, and re-prebuffers from wherever the
+  sender actually is.
+- **A dead `AudioTrack` turned the playback loop into a busy spin.**
+  `AudioTrack.write()`'s return value was ignored, so when the track died —
+  which is what happens when the audio route changes underneath it, e.g.
+  Bluetooth disconnecting mid-stream — every write failed instantly instead
+  of blocking. The loop then spun at CPU speed, and since each iteration
+  also advanced the jitter buffer's expected sequence number, playback
+  raced past the sender within seconds and hit the lockup above. Writes are
+  now checked, a dead track is rebuilt, and a failing write backs off.
+- **Concealment silence assumed a fixed 10ms packet size.** The sender's
+  actual packet length depends on its latency mode and the MTU split, so
+  concealing a lost packet could insert more audio than was lost — a drift
+  the correction loop then had to fight. The receiver now learns the real
+  size from the packets it receives.
 
 ### Fixed
 
-- CI had **never run on push**: both workflows triggered on `branches: [main]`
-  while the default branch is `master`, so only `pull_request` events ever
-  fired. The release `.exe` and debug APK CI built were also discarded rather
-  than uploaded.
-- Pairing on Android could not be cancelled — the dialog's `onDismissRequest`
-  was a no-op, so once the prompt appeared there was no way out of it.
-- `RelayService.ACTION_STOP` existed but was unreachable from anywhere; the
-  only way to stop the service was to force-stop the app. It is now a Stop
-  action on the notification.
-- The Android tab selection reset to Home on every rotation, because it was
-  held in `remember` rather than surviving configuration change.
-- The foreground-service notification used a borrowed framework icon
-  (`android.R.drawable.ic_media_play`), so it looked like another app's
-  notification.
-- A session that ended while waiting for the user to type a pairing code left
-  the pairing prompt on screen with nothing behind it.
-- `CancellationException` was caught and swallowed alongside real errors in
-  the connection coroutine, so a deliberately cancelled session completed as
-  though it had finished normally.
+- The desktop app **crashed on switching appearance to Light or Dark**
+  (`Failed to find Name("subtitle") in Style::text_styles`). egui keeps a
+  separate `Style` per theme, and `Context::set_style` writes only the
+  currently-active one, so the app's custom text styles were installed into
+  whichever theme happened to be active at startup and the other theme was
+  left on egui's stock style. Now installed into both.
+
+### Security
+
+- The pairing code never crosses the network. `PAIR_REQUEST` carries an
+  `HMAC-SHA256(code, phone_device_id || nonce)` proof instead of the code
+  itself — a fresh nonce every connection — and both sides derive the
+  session key locally via HKDF once the laptop verifies the proof. UDP
+  audio payloads are encrypted with ChaCha20-Poly1305. See
+  [`protocol-spec.md`](protocol-spec.md) §5.
+- Repair-flow proof verification uses a constant-time comparison, closing a
+  timing side-channel on the laptop side.
 
 ### Verified
 
-- `desktop-app`: full `cargo test`/`clippy`/`fmt` pass — 63 tests — including
-  a cross-implementation known-answer test for the ChaCha20-Poly1305 payload
-  encryption, and coverage for the theme's contrast/blend helpers and the
-  level meter's dBFS mapping.
-- `android-app`: every platform-independent module (`AudioPacket`,
-  `ControlMessage`, `Crypto`, `JitterBuffer`, `ReconnectBackoff`) compiled
-  and unit-tested against the project's actual Kotlin 1.9.24/`kotlinx`
-  toolchain on a plain JVM — 47 tests — including the Android-side half of
-  that same cross-implementation crypto vector, and a discrete-event
-  simulation of a drifting sender that asserts buffer depth converges and
-  that jitter alone does not provoke correction. See `docs/roadmap.md`
-  Phase 0 and `android-app/README.md`.
+- `desktop-app`: full `cargo test`/`clippy`/`fmt` pass — 74 tests, including
+  a cross-implementation known-answer test for the ChaCha20-Poly1305
+  payload encryption against Android's implementation. The Windows-only
+  endpoint-mute code (for "Also play locally while relaying") is
+  additionally cross-compiled and clippy-checked against the real
+  `x86_64-pc-windows-gnu` target and the `windows` crate's actual API.
+- `android-app`: full `./gradlew assembleDebug testDebugUnitTest lint`
+  pass, including a discrete-event simulation of a drifting sender that
+  asserts jitter-buffer depth converges and that ordinary network jitter
+  alone never provokes a drift correction.
+- The `.deb` package is built and its contents verified directly (`cargo
+  deb`, then `dpkg-deb --contents`/`--info` against the actual output, and
+  the extracted binary run) — not just assumed to work from the
+  configuration.
 
 ### Known gaps
 
-- Phase 0 hardware validation spikes (WASAPI on non-admin accounts,
-  PulseAudio/PipeWire monitor-source capture, `AudioTrack` → A2DP routing,
-  mDNS over an Android hotspot) have not been verified on physical devices
-  or against a live audio server in this environment — see
-  `docs/roadmap.md`.
-- The Android Gradle Plugin/SDK build itself is unverified in this
-  environment (no route to `dl.google.com`) — everything touching the
-  Android framework (`RelayService`, `AudioReceiver`, `PlaybackTrack`,
-  `NsdDiscovery`, the UI) is written and reviewed but not compiled here.
-- Clock-drift correction is validated in simulation, not against two real
-  crystals over a multi-hour session. Its constants (deadband, smoothing,
-  correction rate) are reasoned defaults that on-device testing may want to
-  revisit.
-- Network-change handling cannot be exercised here at all — it needs a real
-  device actually moving between networks.
-- The Windows `.exe` is not code-signed — Authenticode needs a paid
-  certificate, so SmartScreen warns on first run. Checksums are published
-  instead.
-- No Play Store upload. The release builds an `.aab` so this is a drop-in
-  later, but nothing publishes it.
-- macOS and Linux desktop builds are not possible without a new capture
-  backend; WASAPI is Windows-only. See `docs/roadmap.md`.
-- Nothing in the visual redesign has been seen on real hardware: the Mica
-  backdrop, dynamic colour, themed icons and the bottom sheet against gesture
-  navigation all need eyes on a real screen.
+See [`docs/roadmap.md`](docs/roadmap.md) Phase 0 for the full list — in
+short: WASAPI capture, `AudioTrack` → A2DP routing, and mDNS over an actual
+Android hotspot have not yet been exercised on physical hardware in this
+project's history. Clock-drift correction is validated in simulation, not
+against two real crystals over a multi-hour session. No macOS build (no
+system-audio loopback API without a new capture backend — see
+`docs/architecture.md` §2.1). No Play Store upload (the `.aab` is produced,
+nothing publishes it).

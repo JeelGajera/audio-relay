@@ -6,6 +6,68 @@ use thiserror::Error;
 /// codec_id(1) + sequence(4) + timestamp_ms(4) + sample_rate_id(1) + channels(1) + reserved(2)
 pub const HEADER_LEN: usize = 13;
 
+/// ChaCha20-Poly1305's authentication tag, appended to every encrypted
+/// payload (`protocol::crypto`). Counted here because it is part of what
+/// actually goes on the wire, and therefore part of the MTU budget below.
+pub const AEAD_TAG_LEN: usize = 16;
+
+/// Largest UDP datagram this sender will ever emit, header and AEAD tag
+/// included.
+///
+/// **This is a reliability constant, not a tuning knob.** Ethernet/Wi-Fi
+/// MTU is 1500, leaving 1472 bytes of UDP payload over IPv4 — but a 10ms
+/// chunk of 48kHz stereo 16-bit PCM is 1920 bytes, so *every single audio
+/// packet* used to be IP-fragmented into two. Any one fragment lost drops
+/// the whole datagram, which roughly doubles the effective loss rate and is
+/// exactly the "song keeps cutting out" symptom on a phone hotspot, where
+/// loss is already common. 1200 stays under the real MTU with room to spare
+/// for IPv6's larger header and any VPN/tunnel encapsulation in the path —
+/// the same conservative budget QUIC and WebRTC use for the same reason.
+///
+/// `AudioSender::send_frame` splits anything larger across multiple packets
+/// rather than handing an oversized datagram to the OS. See
+/// `max_payload_bytes` below.
+pub const MAX_DATAGRAM_BYTES: usize = 1200;
+
+/// How much *plaintext* PCM fits in one packet without exceeding
+/// [`MAX_DATAGRAM_BYTES`], rounded down to a whole frame so a packet never
+/// carries a partial sample.
+///
+/// `bytes_per_frame` is `channels * 2` for the 16-bit PCM this protocol
+/// carries (`protocol-spec.md` §3).
+pub fn max_payload_bytes(bytes_per_frame: usize) -> usize {
+    let budget = MAX_DATAGRAM_BYTES.saturating_sub(HEADER_LEN + AEAD_TAG_LEN);
+    if bytes_per_frame == 0 {
+        return budget;
+    }
+    // Whole frames only, and always at least one frame.
+    (budget / bytes_per_frame).max(1) * bytes_per_frame
+}
+
+/// Payload size to use when splitting `len` bytes across MTU-sized packets
+/// so that **every packet is the same size**, rather than a run of full
+/// ones followed by a short remainder.
+///
+/// Uniformity is not cosmetic. The receiver is told nothing about how the
+/// sender packetises, so it infers packet duration from the packets it
+/// gets (`JitterBuffer.chunkSizeBytes`) and sizes its target depth,
+/// concealment silence and latency-trim threshold from that. Splitting a
+/// 1920-byte chunk as `[1168, 752]` made every one of those quantities
+/// oscillate packet to packet — the target swung between 20 and 31 chunks
+/// — which tripped the latency trim spuriously and discarded perfectly
+/// good audio every few seconds. Equal packets keep it stable.
+pub fn even_split_bytes(len: usize, max_payload: usize, bytes_per_frame: usize) -> usize {
+    if len == 0 || max_payload == 0 {
+        return max_payload.max(1);
+    }
+    let packets = len.div_ceil(max_payload).max(1);
+    let ideal = len.div_ceil(packets);
+    let frame = bytes_per_frame.max(1);
+    // Round up to a whole frame so no packet splits a sample. This can only
+    // grow `ideal` up to `max_payload`, which is itself frame-aligned.
+    ideal.div_ceil(frame) * frame
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Codec {
@@ -34,7 +96,6 @@ pub enum SampleRate {
 }
 
 impl SampleRate {
-    #[allow(dead_code)] // part of the public wire-format API; not yet called by this sender binary
     pub fn as_hz(self) -> u32 {
         match self {
             SampleRate::Hz44100 => 44_100,
@@ -137,6 +198,102 @@ mod tests {
             channels: 2,
             payload: vec![1, 2, 3, 4, 5, 6, 7, 8],
         }
+    }
+
+    /// The regression this constant exists for: a 10ms chunk of 48kHz
+    /// stereo 16-bit PCM is 1920 bytes, which with the header and AEAD tag
+    /// made a 1949-byte datagram — over the 1472-byte IPv4/Ethernet UDP
+    /// limit, so every audio packet was IP-fragmented and a single lost
+    /// fragment dropped the whole thing.
+    #[test]
+    fn a_ten_millisecond_chunk_no_longer_fits_in_one_datagram() {
+        let bytes_per_frame = 2 * 2; // stereo, 16-bit
+        let ten_ms = 48_000 * bytes_per_frame * 10 / 1000;
+        assert_eq!(ten_ms, 1920);
+        assert!(
+            ten_ms + HEADER_LEN + AEAD_TAG_LEN > 1472,
+            "this test is meaningless if a 10ms chunk already fit the MTU"
+        );
+        // ...so it must be split into more than one packet.
+        assert!(max_payload_bytes(bytes_per_frame) < ten_ms);
+    }
+
+    /// The regression that caused periodic audible chopping: an uneven
+    /// split made the receiver's inferred packet duration oscillate, which
+    /// swung its target depth and tripped its latency trim on good audio.
+    #[test]
+    fn a_chunk_splits_into_equal_packets() {
+        let bytes_per_frame = 4;
+        let max_payload = max_payload_bytes(bytes_per_frame);
+        for chunk_ms in [5_usize, 10] {
+            let len = 48_000 * bytes_per_frame * chunk_ms / 1000;
+            let per = even_split_bytes(len, max_payload, bytes_per_frame);
+            let sizes: Vec<usize> = (0..len)
+                .step_by(per)
+                .map(|off| per.min(len - off))
+                .collect();
+            assert!(
+                sizes.windows(2).all(|w| w[0] == w[1]),
+                "{chunk_ms}ms chunk split unevenly into {sizes:?}"
+            );
+            assert!(sizes
+                .iter()
+                .all(|s| *s + HEADER_LEN + AEAD_TAG_LEN <= MAX_DATAGRAM_BYTES));
+            assert_eq!(sizes.iter().sum::<usize>(), len, "split lost audio");
+        }
+    }
+
+    #[test]
+    fn an_even_split_never_exceeds_the_budget_or_splits_a_frame() {
+        let bytes_per_frame = 4;
+        let max_payload = max_payload_bytes(bytes_per_frame);
+        for len in (bytes_per_frame..8000).step_by(bytes_per_frame) {
+            let per = even_split_bytes(len, max_payload, bytes_per_frame);
+            assert!(per <= max_payload, "len {len} produced an oversized {per}");
+            assert_eq!(per % bytes_per_frame, 0, "len {len} split a frame");
+            assert!(per > 0);
+        }
+    }
+
+    #[test]
+    fn a_full_packet_stays_within_the_mtu_budget() {
+        for channels in [1_usize, 2] {
+            let bytes_per_frame = channels * 2;
+            let payload = max_payload_bytes(bytes_per_frame);
+            // Worst case on the wire: payload + AEAD tag + header.
+            assert!(
+                payload + AEAD_TAG_LEN + HEADER_LEN <= MAX_DATAGRAM_BYTES,
+                "{channels}ch packet would be {} bytes",
+                payload + AEAD_TAG_LEN + HEADER_LEN
+            );
+        }
+    }
+
+    #[test]
+    fn max_payload_is_always_a_whole_number_of_frames() {
+        for channels in [1_usize, 2, 6, 8] {
+            let bytes_per_frame = channels * 2;
+            let payload = max_payload_bytes(bytes_per_frame);
+            assert_eq!(
+                payload % bytes_per_frame,
+                0,
+                "{channels}ch payload {payload} would split a sample in half"
+            );
+            assert!(payload > 0);
+        }
+    }
+
+    /// A frame larger than the whole budget still has to produce a
+    /// sendable packet rather than a zero-length one that silently drops
+    /// audio.
+    #[test]
+    fn an_absurdly_large_frame_still_yields_one_whole_frame() {
+        let huge = MAX_DATAGRAM_BYTES * 4;
+        assert_eq!(max_payload_bytes(huge), huge);
+        assert_eq!(
+            max_payload_bytes(0),
+            MAX_DATAGRAM_BYTES - HEADER_LEN - AEAD_TAG_LEN
+        );
     }
 
     #[test]

@@ -146,7 +146,7 @@ private fun OutputDeviceCard(onSelectOutputDevice: (String?) -> Unit) {
 
 @Composable
 private fun LatencyCard(onSetJitterDepth: (Int) -> Unit) {
-    val stored by RelayState.jitterTargetDepthChunks.collectAsStateWithLifecycle()
+    val stored by RelayState.jitterTargetDepthMs.collectAsStateWithLifecycle()
     // Local state during the drag so the slider tracks the finger; the
     // committed value only changes on release.
     var sliderValue by remember(stored) { mutableFloatStateOf(stored.toFloat()) }
@@ -163,13 +163,15 @@ private fun LatencyCard(onSetJitterDepth: (Int) -> Unit) {
                 value = sliderValue,
                 onValueChange = { sliderValue = it },
                 onValueChangeFinished = { onSetJitterDepth(sliderValue.toInt()) },
-                valueRange = SettingsStore.MIN_JITTER_DEPTH_CHUNKS.toFloat()..
-                    SettingsStore.MAX_JITTER_DEPTH_CHUNKS.toFloat(),
-                steps = SettingsStore.MAX_JITTER_DEPTH_CHUNKS - SettingsStore.MIN_JITTER_DEPTH_CHUNKS - 1,
+                valueRange = SettingsStore.MIN_JITTER_DEPTH_MS.toFloat()..
+                    SettingsStore.MAX_JITTER_DEPTH_MS.toFloat(),
+                // One notch per 10ms — fine enough to tune, coarse enough
+                // that the slider still feels like discrete choices.
+                steps = (SettingsStore.MAX_JITTER_DEPTH_MS - SettingsStore.MIN_JITTER_DEPTH_MS) / 10 - 1,
                 modifier = Modifier.weight(1f),
             )
             Text(
-                stringResource(R.string.settings_buffer_value, sliderValue.toInt() * 10),
+                stringResource(R.string.settings_buffer_value, sliderValue.toInt()),
                 style = MaterialTheme.typography.bodyMedium,
             )
         }

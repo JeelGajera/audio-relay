@@ -24,15 +24,24 @@ class SettingsStore(context: Context) {
         }
 
     /**
-     * Jitter buffer depth in ~10ms chunks (docs/architecture.md §6: 20-40ms
-     * is the documented sweet spot, i.e. 2-4 chunks) — lower is less delay,
-     * higher is more resistant to network jitter/loss. Clamped to a sane
-     * range so a bad persisted value can't produce a silently-broken buffer.
+     * Jitter buffer depth in **milliseconds** — lower is less delay, higher
+     * is more resistant to network jitter and loss. Clamped to a sane range
+     * so a bad persisted value can't produce a silently-broken buffer.
+     *
+     * This was previously stored as a count of ~10ms "chunks", which was
+     * wrong in a way that mattered: a packet's real duration depends on the
+     * sender's latency mode and its MTU split, so the shipped default of 3
+     * chunks actually meant ~18ms of buffer and the maximum reachable
+     * setting was ~36ms. Wi-Fi jitter is routinely larger than that, and a
+     * phone hotspot much larger, so the buffer underran more or less
+     * continuously. The key is deliberately new (`..._ms`) rather than
+     * reused, so an old persisted chunk count is never reinterpreted as
+     * milliseconds.
      */
-    var jitterTargetDepthChunks: Int
-        get() = prefs.getInt(KEY_JITTER_DEPTH, DEFAULT_JITTER_DEPTH_CHUNKS).coerceIn(MIN_JITTER_DEPTH_CHUNKS, MAX_JITTER_DEPTH_CHUNKS)
+    var jitterTargetDepthMs: Int
+        get() = prefs.getInt(KEY_JITTER_DEPTH_MS, DEFAULT_JITTER_DEPTH_MS).coerceIn(MIN_JITTER_DEPTH_MS, MAX_JITTER_DEPTH_MS)
         set(value) {
-            prefs.edit().putInt(KEY_JITTER_DEPTH, value.coerceIn(MIN_JITTER_DEPTH_CHUNKS, MAX_JITTER_DEPTH_CHUNKS)).apply()
+            prefs.edit().putInt(KEY_JITTER_DEPTH_MS, value.coerceIn(MIN_JITTER_DEPTH_MS, MAX_JITTER_DEPTH_MS)).apply()
         }
 
     /**
@@ -60,13 +69,23 @@ class SettingsStore(context: Context) {
     companion object {
         private const val PREFS_NAME = "audio_relay_settings"
         private const val KEY_PREFERRED_OUTPUT_DEVICE = "preferred_output_device"
-        private const val KEY_JITTER_DEPTH = "jitter_target_depth_chunks"
+        private const val KEY_JITTER_DEPTH_MS = "jitter_target_depth_ms"
         private const val KEY_THEME_MODE = "theme_mode"
         private const val KEY_DYNAMIC_COLOR = "dynamic_color"
 
-        const val DEFAULT_JITTER_DEPTH_CHUNKS = 3
-        const val MIN_JITTER_DEPTH_CHUNKS = 2
-        const val MAX_JITTER_DEPTH_CHUNKS = 6
+        /**
+         * Enough to ride out ordinary Wi-Fi jitter, including a phone
+         * hotspot, without being so deep the delay becomes obvious. The
+         * old effective default was ~18ms, which is well below what any
+         * real wireless link delivers.
+         */
+        const val DEFAULT_JITTER_DEPTH_MS = 120
+
+        /** For a quiet, wired-quality link where latency matters most. */
+        const val MIN_JITTER_DEPTH_MS = 30
+
+        /** For a congested or distant link, trading delay for continuity. */
+        const val MAX_JITTER_DEPTH_MS = 400
     }
 }
 

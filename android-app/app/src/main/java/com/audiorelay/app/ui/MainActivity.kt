@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                     onForgetLaptop = ::forgetLaptop,
                     onSetThemeMode = ::setThemeMode,
                     onSetDynamicColor = ::setDynamicColor,
+                    onToggleRelay = ::toggleRelay,
                 )
             }
         }
@@ -67,6 +68,21 @@ class MainActivity : ComponentActivity() {
 
     private fun startRelayService() {
         ContextCompat.startForegroundService(this, Intent(this, RelayService::class.java))
+    }
+
+    /**
+     * The Home screen's Start/Stop switch. Stopping fully tears the service
+     * down (see `RelayService.ACTION_STOP`); starting again means launching
+     * a fresh instance — same call [startRelayService] makes on first
+     * launch, since a stopped service has already been destroyed rather
+     * than merely paused.
+     */
+    private fun toggleRelay(enabled: Boolean) {
+        if (enabled) {
+            startRelayService()
+        } else {
+            sendServiceAction(RelayService.ACTION_STOP) {}
+        }
     }
 
     private fun connectToLaptop(laptop: DiscoveredLaptop) {

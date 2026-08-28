@@ -2,10 +2,11 @@ package com.audiorelay.app.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,6 +35,23 @@ private val ThirdPartyLicenses = listOf(
     "kotlinx.coroutines" to "Apache-2.0",
     "kotlinx.serialization" to "Apache-2.0",
 )
+
+/**
+ * Groups [ThirdPartyLicenses] by license, preserving first-appearance
+ * order. A name-per-row table with the license right-aligned (the previous
+ * design) reads fine until a name is long enough to need two lines on a
+ * narrow phone width, at which point grouping by the thing that actually
+ * varies — the license — reads better; here every entry happens to share
+ * one license, so this also collapses five repeated "Apache-2.0" labels
+ * into one. Mirrors `desktop-app/src/ui/about.rs`'s `grouped_by_license`.
+ */
+private fun groupedByLicense(): List<Pair<String, List<String>>> {
+    val groups = LinkedHashMap<String, MutableList<String>>()
+    for ((name, license) in ThirdPartyLicenses) {
+        groups.getOrPut(license) { mutableListOf() }.add(name)
+    }
+    return groups.map { (license, names) -> license to names }
+}
 
 @Composable
 fun AboutScreen() {
@@ -90,19 +108,20 @@ fun AboutScreen() {
             title = stringResource(R.string.about_licenses_title),
             subtitle = stringResource(R.string.about_licenses_hint),
         ) {
-            ThirdPartyLicenses.forEach { (name, license) ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(name, style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        license,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            val groups = groupedByLicense()
+            groups.forEachIndexed { index, (license, names) ->
+                Text(
+                    license,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    names.joinToString(", "),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+                if (index != groups.lastIndex) {
+                    Box(Modifier.height(12.dp))
                 }
             }
         }

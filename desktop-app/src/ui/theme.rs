@@ -210,19 +210,26 @@ pub fn install(ctx: &egui::Context) {
         ctx.set_visuals_of(theme, visuals(&palette, theme));
     }
 
-    let mut style = (*ctx.style()).clone();
-    style.text_styles = text_styles();
-    style.spacing.item_spacing = egui::vec2(space::SM, space::SM);
-    style.spacing.button_padding = egui::vec2(space::MD, space::SM);
-    style.spacing.menu_margin = Margin::same(space::XS as i8);
-    style.spacing.indent = space::LG;
-    style.spacing.slider_width = 220.0;
-    style.spacing.combo_width = 220.0;
-    style.spacing.interact_size.y = 30.0;
-    // Wrapping mid-word looks broken in a settings list; wrap on word
-    // boundaries and let long device names elide instead.
-    style.wrap_mode = Some(egui::TextWrapMode::Wrap);
-    ctx.set_style(style);
+    // `all_styles_mut`, not `set_style`: egui keeps a *separate* `Style` per
+    // theme (`Options::dark_style`/`light_style`), and `set_style` writes
+    // only the currently-active one. Installing into just that one left the
+    // other theme on egui's stock style — with none of the `Name(..)` text
+    // styles below registered — so the first `text_style(theme::text::subtitle())`
+    // after switching themes panicked with "Failed to find Name(\"subtitle\")
+    // in Style::text_styles". Covered by `both_themes_get_the_custom_text_styles`.
+    ctx.all_styles_mut(|style| {
+        style.text_styles = text_styles();
+        style.spacing.item_spacing = egui::vec2(space::SM, space::SM);
+        style.spacing.button_padding = egui::vec2(space::MD, space::SM);
+        style.spacing.menu_margin = Margin::same(space::XS as i8);
+        style.spacing.indent = space::LG;
+        style.spacing.slider_width = 220.0;
+        style.spacing.combo_width = 220.0;
+        style.spacing.interact_size.y = 30.0;
+        // Wrapping mid-word looks broken in a settings list; wrap on word
+        // boundaries and let long device names elide instead.
+        style.wrap_mode = Some(egui::TextWrapMode::Wrap);
+    });
 }
 
 fn text_styles() -> std::collections::BTreeMap<TextStyle, FontId> {
@@ -367,6 +374,47 @@ mod tests {
             assert_ne!(p.text_primary, p.surface);
             assert_ne!(p.border, p.surface);
             assert_ne!(p.surface, p.bg);
+        }
+    }
+
+    /// Regression test for a crash on switching appearance: every named text
+    /// style has to exist in *both* themes' styles, because egui stores a
+    /// style per theme and resolving a `TextStyle::Name` that is missing
+    /// panics rather than falling back. Before `install` used
+    /// `all_styles_mut`, only the theme active at startup got these, so
+    /// clicking Light (from a dark system theme) panicked immediately.
+    #[test]
+    fn both_themes_get_the_custom_text_styles() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+
+        for theme in [Theme::Dark, Theme::Light] {
+            let style = ctx.style_of(theme);
+            for named in [text::display(), text::subtitle(), text::code()] {
+                assert!(
+                    style.text_styles.contains_key(&named),
+                    "{theme:?} style is missing {named:?}; \
+                     resolving it at render time would panic"
+                );
+            }
+        }
+    }
+
+    /// The same, exercised the way the UI actually hits it — through
+    /// `Style::text_styles` lookup after a live theme switch, which is the
+    /// call that panicked.
+    #[test]
+    fn switching_theme_at_runtime_keeps_named_styles_resolvable() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+
+        for preference in [egui::ThemePreference::Light, egui::ThemePreference::Dark] {
+            ctx.set_theme(preference);
+            let style = ctx.style();
+            assert!(
+                style.text_styles.contains_key(&text::subtitle()),
+                "{preference:?} lost the subtitle text style"
+            );
         }
     }
 

@@ -5,6 +5,11 @@ Bluetooth device your phone already has connected. The desktop side runs on
 Windows (WASAPI loopback capture) or Linux (PulseAudio/PipeWire monitor
 capture).
 
+Because the laptop keeps playing while it relays, a pair of headphones on
+the laptop and another on the phone both hear the same audio — shared
+listening with nothing to set up. See the
+[user guide](docs/user-guide.md#listening-on-two-headsets-at-once).
+
 No admin rights. No virtual audio driver. No cloud service. Your phone stays
 the Bluetooth endpoint — this project just gets your laptop's audio to it
 over the local network (Wi-Fi or the phone's own hotspot) so Android's normal
@@ -21,12 +26,34 @@ Laptop (Windows/Linux)                    Phone (Android)
 └─────────────────────────┘               └───────────────────────────┘
 ```
 
+## Screenshots
+
+|  |  |  |
+|---|---|---|
+| ![Desktop app ready to pair, showing a six-digit code](docs/screenshots/desktop-pairing.png) | ![Desktop app streaming, with a live output level meter](docs/screenshots/desktop-streaming.png) | ![Desktop app settings](docs/screenshots/desktop-settings.png) |
+| Desktop — ready to pair | Desktop — streaming | Desktop — settings |
+| ![Android Home screen](docs/screenshots/android-home.png) | ![Android Settings screen](docs/screenshots/android-settings.png) | ![Android About screen with grouped licenses](docs/screenshots/android-about.png) |
+| Android — Home | Android — Settings | Android — About |
+
+More in the [user guide](docs/user-guide.md).
+
 ## Status
 
-Early, active development. See [`docs/roadmap.md`](docs/roadmap.md) for the
-phased build plan and what's implemented so far. This is **not yet a
-finished product** — treat it as a working scaffold you can build on, not a
-polished release.
+Early, active development. `v0.1.0` is the first end-to-end feature set —
+see [`CHANGELOG.md`](CHANGELOG.md) for exactly what it includes and
+[`docs/roadmap.md`](docs/roadmap.md) for the phased build plan and what's
+still ahead. Several hardware-dependent assumptions (WASAPI on real
+Windows, `AudioTrack` → A2DP routing, mDNS over an Android hotspot) are
+implemented against the documented APIs but not yet confirmed on physical
+devices — see `docs/roadmap.md` Phase 0. Treat this as a working, tested
+scaffold, not yet a polished release.
+
+## Using it
+
+Already have a build (or grabbed one from
+[Releases](https://github.com/JeelGajera/audio-relay/releases))? See the
+**[user guide](docs/user-guide.md)** for installing, pairing, and every
+setting on both apps, plus troubleshooting.
 
 ## Why this exists
 
@@ -44,7 +71,11 @@ audio-relay/
 ├── desktop-app/       # Rust — loopback capture (WASAPI/PulseAudio), network, control
 ├── android-app/       # Kotlin — receiver, jitter buffer, playback, service
 ├── protocol-spec.md   # Canonical wire protocol — keep both apps in sync
-└── docs/              # Architecture, roadmap, latency budget
+└── docs/
+    ├── user-guide.md    # Install, pair, every setting, troubleshooting
+    ├── architecture.md  # Design rationale, latency budget
+    ├── roadmap.md       # Phased build plan, what's done vs. planned
+    └── screenshots/
 ```
 
 ## Building

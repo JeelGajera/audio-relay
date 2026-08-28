@@ -32,10 +32,17 @@ end-to-end.
       listen back.
 - [ ] Confirm PulseAudio monitor-source capture (`capture::linux_impl`)
       works against a real running PulseAudio *and* a PipeWire-with-
-      `pipewire-pulse` server — no sandbox in this repository's history has
-      had either running, so this has only ever been compile- and
-      lint-checked against `libpulse-dev`, never connected to a live
-      daemon. Dump captured audio to a `.wav` file and listen back.
+      `pipewire-pulse` server. **Partially verified**: a sandbox in this
+      repository's history now has a live `pipewire-pulse` server, and the
+      introspection API this module uses for device enumeration, default-
+      sink resolution, and the "Also play locally while relaying" mute
+      control (`resolve_monitor_source`/`find_sink_name_for_monitor`/
+      `set_sink_mute`) has been exercised against it end-to-end — see
+      `capture::linux_impl::tests::mute_round_trips_against_a_live_server`,
+      which asserts the real effect via `wpctl`, not just that the call
+      returned `Ok`. **Still unverified:** the actual audio *capture* path
+      (`Simple::new`/`stream.read`) — dump captured audio to a `.wav` file
+      and listen back to close this out.
 - [ ] Confirm `AudioTrack` in low-latency mode + `USAGE_MEDIA` actually
       routes to A2DP earbuds (not the phone speaker) by playing a
       locally-generated test tone.
@@ -94,9 +101,23 @@ end-to-end.
       or a network change). Previously reconnection depended on NSD
       happening to re-announce the service, which it has no obligation to
       do.
+- [x] Linux capture self-heals when the selected device disappears (e.g. a
+      Bluetooth speaker gets disconnected mid-session) — falls back to the
+      system default instead of retrying a monitor source that no longer
+      exists forever, matching the Windows backend's existing fallback.
+- [x] Stale-pairing self-heal — "remembering each other" is tracked
+      independently on each side, so forgetting a laptop on the phone alone
+      doesn't tell the laptop. The phone now falls back to a fresh pairing
+      code whenever it doesn't actually have a usable local key, instead of
+      retrying a `REPAIR` that could never succeed; the laptop keeps a
+      pairing code visible whenever nothing is actively streaming, not just
+      before the first pairing. Neither app needs a restart to recover.
 - **Implemented in:** `desktop-app/src/config.rs`,
+  `desktop-app/src/capture/mod.rs` (device fallback),
   `desktop-app/src/network/control_channel.rs` (heartbeat),
+  `desktop-app/src/ui/home.rs` (pairing card on disconnect),
   `android-app/.../service/RelayService.kt`,
+  `android-app/.../state/PairedDeviceStore.kt`,
   `android-app/.../service/ReconnectBackoff.kt`.
 
 ## Phase 5 — Jitter buffer & latency tuning
@@ -115,17 +136,26 @@ end-to-end.
       suite in `android-app/.../audio/ClockDriftTest.kt`.
 - [x] Low/Balanced latency-mode toggle in the Windows UI (`ui/settings.rs`)
       — changes the capture chunk size (~5ms vs ~10ms) live, no restart.
+- [x] "Also play locally while relaying" — on by default (unchanged
+      behavior: loopback capture never touched local playback); off mutes
+      this laptop's own output for the duration of an active stream.
+      Verified against a real PulseAudio/PipeWire server on Linux; the
+      Windows `IAudioEndpointVolume` path is cross-compiled and
+      clippy-checked against the real `windows` crate API but not run on
+      real Windows hardware — see Phase 0.
 
 ## Phase 6 — UI polish
 
 - [x] Configurable `egui` UI (Windows) — three tabs: Home (status, pairing
       code, streaming on/off), Settings (capture-device picker, latency
       mode, paired-device management), About (version, build commit/date,
-      GitHub link, license/third-party info). See `desktop-app/src/ui/`.
+      GitHub link, license/third-party info, licenses grouped by license
+      rather than one row per crate). See `desktop-app/src/ui/`.
 - [x] Configurable Compose UI (Android) — matching three-screen shell:
-      Home, Settings (output-device picker, jitter depth, paired-laptop
-      management), About (version, build commit/date, GitHub link, license
-      info). See `android-app/.../ui/`.
+      Home (now with a Start/Stop switch, not just the notification's Stop
+      action), Settings (output-device picker, jitter depth, paired-laptop
+      management), About (version, build commit/date, GitHub link, licenses
+      grouped by license). See `android-app/.../ui/`.
 - [x] Output/capture device selection on both sides — the laptop picks
       which output device's audio to relay; the phone picks which output
       device (Bluetooth/wired/USB/speaker) to route to, or leaves it on
@@ -147,11 +177,12 @@ up. (The packaging and Linux items below are done; the rest are still ideas.)
 - Process-specific loopback capture ("capture just this app").
 - Browser-based receiver as a zero-install alternative.
 - [x] Packaging/release pipeline — `.github/workflows/release.yml` builds a
-  portable `.exe`, a Linux `.tar.gz`, and a signed APK/AAB on a `v*` tag,
-  with checksums and auto-generated notes. See `docs/releasing.md`. The
-  `.exe` and Linux binary are **not** code-signed (that needs a paid
-  certificate, and doesn't apply on Linux anyway); the APK is signed when
-  the keystore secrets are configured.
+  portable `.exe`, a Linux `.tar.gz` and installable `.deb` (via `cargo
+  deb`), and a signed APK/AAB on a `v*` tag, with checksums and
+  auto-generated notes. See `docs/releasing.md`. The `.exe` and Linux
+  binaries are **not** code-signed (that needs a paid certificate, and
+  doesn't apply on Linux anyway); the APK is signed when the keystore
+  secrets are configured.
 - [x] Linux desktop support — `capture::linux_impl` (PulseAudio Simple API
   against each sink's `.monitor` source, transparently covering PipeWire
   distros via `pipewire-pulse`) alongside the existing Windows WASAPI

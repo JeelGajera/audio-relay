@@ -25,6 +25,16 @@ pub fn show(ui: &mut egui::Ui, state: &AppState) {
         }
         ConnectionStatus::Disconnected { device_name } => {
             disconnected_card(ui, device_name);
+            // A previously-paired phone reconnects on its own — no code
+            // needed. But "previously paired" is tracked independently on
+            // each side: if the phone forgot this laptop (or this is a
+            // different phone entirely), it needs a fresh code, and
+            // without showing one here the only way to get back to this
+            // screen used to be restarting the app. Reusing `pairing_card`
+            // means one always-current code is visible whenever nothing is
+            // actively streaming, not just on first launch.
+            ui.add_space(space::LG);
+            pairing_card(ui, state);
         }
     }
 
@@ -122,8 +132,9 @@ fn disconnected_card(ui: &mut egui::Ui, device_name: &str) {
         ui.add_space(space::SM);
         widgets::muted_label(
             ui,
-            "No action needed here — the phone retries automatically, and \
-             re-pairing is not required.",
+            "If it's the same phone and it still remembers this laptop, it \
+             reconnects on its own — no action needed. Pairing a different \
+             phone, or one that's forgotten this laptop? Use the code below.",
         );
     });
 }

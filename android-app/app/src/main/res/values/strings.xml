@@ -19,6 +19,13 @@
     <string name="home_headline_pairing">Almost there</string>
     <string name="home_headline_reconnecting">Reconnecting</string>
     <string name="home_headline_network_changed">Network changed</string>
+    <string name="home_headline_stopped">Relay is off</string>
+    <string name="home_headline_trouble">Still trying to connect</string>
+
+    <!-- Relay on/off switch -->
+    <string name="home_relay_toggle_title">Relay</string>
+    <string name="home_relay_toggle_hint_on">Looking for and playing audio from your laptop.</string>
+    <string name="home_relay_toggle_hint_off">Turn on to discover and connect to a laptop.</string>
 
     <!-- Status pill. %1$s is the laptop name where one is known. -->
     <string name="status_idle">Starting up</string>
@@ -29,12 +36,17 @@
     <string name="status_disconnected">Disconnected</string>
     <string name="status_reconnecting">Retrying shortly</string>
     <string name="status_network_changed">Searching again on the new network</string>
+    <string name="status_stopped">Off</string>
+    <string name="status_connection_trouble">Retrying — check both devices</string>
     <string name="status_generic_laptop">your laptop</string>
 
     <string name="home_now_playing">Now playing</string>
     <string name="home_now_playing_hint">Live level of the audio reaching your output device.</string>
     <string name="home_nearby_title">Nearby laptops</string>
     <string name="home_nearby_hint">Laptops running audio-relay on this network.</string>
+    <string name="home_trouble_title">Can\'t reach your laptop</string>
+    <string name="home_trouble_hint">Still retrying in the background. Check that the desktop app is open, that both devices are on the same Wi\u2011Fi (a guest network usually blocks this), then pick your laptop below to try again.</string>
+    <string name="pairing_rejected">That code wasn\'t accepted. Check the six digits shown on the laptop and try again.</string>
     <string name="home_searching">Searching… make sure the desktop app is running on the same network.</string>
 
     <!-- Pairing -->
@@ -49,7 +61,7 @@
     <string name="settings_output_none">No output devices reported yet.</string>
 
     <string name="settings_buffer_title">Buffer size</string>
-    <string name="settings_buffer_hint">Smaller means less delay; larger rides out a busy network. Applies on the next connection.</string>
+    <string name="settings_buffer_hint">Smaller means less delay; larger rides out a busy network or a phone hotspot. Raise this first if audio keeps cutting out. Applies on the next connection.</string>
     <string name="settings_buffer_value">~%1$dms</string>
 
     <string name="settings_appearance_title">Appearance</string>

@@ -26,8 +26,8 @@ can remove. This project's job is to not add much *on top* of that.
 ## 1. System architecture overview
 
 ```
-┌─────────────────────────┐        ┌──────────────────────────┐
-│   Windows/Linux Laptop   │        │   Android Phone           │
+┌──────────────────────────┐        ┌────────────────────────────┐
+│   Windows/Linux Laptop   │        │   Android Phone            │
 │                          │        │                            │
 │  Loopback capture (WASAPI│  UDP   │  UDP audio receiver        │
 │   or PulseAudio)         │ (PCM)  │         │                  │
@@ -43,7 +43,7 @@ can remove. This project's job is to not add much *on top* of that.
 │                          │        │  Foreground Service +      │
 │  mDNS advertise/browse   │  mDNS  │  NSD (mDNS) advertise/     │
 │  ("_audiorelay._udp")    │◀──────▶│  browse                    │
-└─────────────────────────┘        └──────────────────────────┘
+└──────────────────────────┘        └────────────────────────────┘
 ```
 
 Two independent apps, both required: a Windows app (pure user-mode,
@@ -140,8 +140,19 @@ same static binary, no WebView — keeps the "just an exe" promise airtight.
    under `%LOCALAPPDATA%\AudioRelay\config.toml` on Windows, or
    `$XDG_CONFIG_HOME/audiorelay/config.toml` on Linux, so re-pairing isn't
    needed every launch.
-7. Minimal UI: connection status, paired device name, pairing code when
-   unpaired, Start/Stop, latency-mode toggle (Low/Balanced).
+7. Minimal UI: connection status, paired device name, pairing code
+   whenever nothing is actively streaming (not just before the first
+   pairing — a disconnected session shows one too, since a phone can need a
+   fresh code at any point, e.g. it forgot this laptop or it's a different
+   phone), Start/Stop, latency-mode toggle (Low/Balanced).
+8. **Local playback control:** "Also play locally while relaying" — on by
+   default, matching loopback capture's natural behavior (it doesn't touch
+   local playback at all). Turning it off mutes this laptop's own output
+   for the duration of an active stream: `SetSinkMute`-equivalent via
+   PulseAudio's introspection API on Linux, `IAudioEndpointVolume::SetMute`
+   on Windows. Applied idempotently once per capture chunk against the
+   desired state, so it's cheap to check and only actually calls into the
+   OS on an actual change — see `capture::mod`'s `should_mute_local_playback`.
 
 ## 3. Android component
 
@@ -177,7 +188,20 @@ matters most anyway.
 7. Auto-reconnect: `ConnectivityManager` callbacks catch Wi-Fi/hotspot
    changes and IP churn, re-run discovery, and resume without user action.
 8. Minimal UI: connected laptop name, current output device, latency
-   indicator, Connect/Disconnect.
+   indicator, and a Start/Stop switch on the Home screen — the notification
+   action alone used to be the only way to stop, and stopping that way
+   didn't update the UI's own state, so reopening the app after using it
+   could show a stale "Streaming" status for a service that had actually
+   been torn down. Both are now the same code path, and it correctly leaves
+   the UI in a genuine "off" state.
+9. **Forgetting a laptop is one-sided by design** (it only touches this
+   phone's storage, not the laptop's), so `RelayService` treats "the laptop
+   still reports us as paired" and "we still have a usable local key" as
+   two independent facts rather than trusting the laptop's claim — falling
+   back to the pairing-code flow whenever the local key is missing,
+   regardless of what the laptop says. Forgetting also clears the
+   auto-reconnect pointer if it pointed at the forgotten laptop, so a
+   forgotten laptop isn't immediately retried on the next launch.
 
 ## 4. Network protocol summary
 
@@ -203,6 +227,153 @@ Deliberate, LAN-specific call:
 Audio over UDP (loss-tolerant, latency-sensitive); pairing/heartbeat/control
 over TCP (low-frequency, needs reliability, latency doesn't matter there).
 
+### 4.3 One packet must fit one MTU
+
+**Every audio datagram stays under `packet::MAX_DATAGRAM_BYTES` (1200), and
+the sender splits a captured chunk across as many packets as that takes.**
+
+This is not a micro-optimisation. Raw PCM is bulky: 10ms of 48kHz stereo
+16-bit audio is 1920 bytes, so a whole chunk in one datagram exceeded the
+~1472-byte UDP payload a 1500-byte MTU allows, and *every single packet*
+was IP-fragmented into two. IP fragments are all-or-nothing — lose either
+half and the whole packet is gone — so fragmenting roughly doubles the
+effective loss rate, on precisely the marginal Wi-Fi/hotspot links where
+loss is already the limiting factor. It showed up as constant brief
+dropouts.
+
+1200 rather than 1472 leaves headroom for IPv6's larger header and any
+VPN/tunnel encapsulation in the path, the same conservative budget QUIC and
+WebRTC use.
+
+Because each split packet carries its own sequence number and timestamp,
+the receiver cannot distinguish a split chunk from natively-small ones —
+so this needed no protocol change. It does mean **the receiver must not
+assume a packet size**: `JitterBuffer` learns the real one from arriving
+packets, since concealing a lost packet with the wrong amount of silence
+injects drift the correction loop then has to fight.
+
+### 4.4 Capture must be *paced*, not merely correct
+
+The single worst defect this project has had was not a wrong calculation —
+it was capture arriving in bursts.
+
+Both OS capture APIs will happily hand you audio in large infrequent
+blocks, and both do so **by default**:
+
+- **Linux/PulseAudio.** `pa_simple_new` takes a `BufferAttr`, and passing
+  `None` lets the server choose `fragsize` — documented as defaulting to
+  "something like 2s". Measured against a real PipeWire server, that meant
+  194 of every 200 reads returned instantly and then the stream stalled for
+  **341ms**. Passing an explicit fragment size took the median gap to
+  10.65ms with a worst case of 11.11ms. See
+  `linux_impl::record_buffer_attr` and the `capture_delivery_cadence` probe
+  that measures it.
+- **Windows/WASAPI.** Event-driven shared mode is inherently paced at the
+  engine period, so it does not have Linux's problem — but the buffer
+  capacity passed to `IAudioClient::Initialize` must be the engine's
+  *default* period, not the hardware *minimum*. The minimum only applies to
+  exclusive mode, which loopback capture cannot use, and asking for a
+  buffer below one engine period leaves no headroom for a late read.
+
+Why this matters more than it looks: a burst is not just latency, it is
+**unhideable** latency. A 341ms gap in delivery needs a >341ms jitter
+buffer to conceal, which is far more than this app targets — so the
+receiver underran on every burst and played concealment silence instead,
+which is what "it cuts out constantly" was. Bursts also dump tens of UDP
+packets into the network at once, which a phone hotspot answers by
+dropping them, turning a pacing bug into a loss bug as well.
+
+**So: any change to a capture backend must keep delivery paced, and pacing
+is a thing to measure rather than assume.**
+
+### 4.5 Buffer depth is a duration, never a packet count
+
+The receiver's jitter buffer is configured in **milliseconds**. It converts
+to packets internally, against the packet size it observes at runtime.
+
+Expressing it in packets — which this project originally did — silently
+ties the setting to how the sender happens to be packetising. A packet's
+duration depends on the sender's latency mode *and* on the MTU split in
+§4.3, so a default of "3 chunks" turned out to mean ~18ms, with even the
+maximum setting reaching only ~36ms. Ordinary Wi-Fi jitter exceeds that,
+and a phone hotspot exceeds it by a lot, so the buffer underran more or
+less continuously.
+
+The same rule applies to concealment: a lost packet must be concealed with
+exactly as much silence as was lost, so the buffer learns the real packet
+size rather than assuming one.
+
+### 4.6 Queues between real-time stages must be bounded
+
+The capture→sender queue is bounded and **drops** when full.
+
+An unbounded queue between a real-time producer and a slower consumer does
+not buffer, it accumulates: every chunk that piles up is delay the listener
+never gets back, and nothing in the pipeline ever gives it back. Bounded,
+the same stall costs a brief dropout instead — recoverable, and far less
+annoying than audio drifting permanently further behind.
+
+### 4.7 Backlog is latency, and only skipping sheds it
+
+Buffer depth that sits persistently above target is not jitter tolerance —
+it is delay the listener pays on every packet for the rest of the session.
+
+Nothing in the steady-state design removes it. The clock-drift loop moves
+one PCM frame per ten packets, which is correct for cancelling tens of ppm
+of crystal drift and useless here: shedding 200ms of backlog that way takes
+about ten minutes. So a single transient stall — a descheduled receive
+loop, a burst of Wi-Fi retransmits — used to leave playback running
+seconds behind live permanently.
+
+`JitterBuffer` therefore **skips forward** when depth exceeds its target by
+a wide margin, discarding the backlog in one step. That costs a brief
+discontinuity and buys back correct latency, which for live audio is
+overwhelmingly the right trade. The two mechanisms are deliberately
+separate: frame-level correction for continuous drift, skip-ahead for
+accumulated backlog.
+
+The same reasoning bounds every other queue in the path. The UDP receive
+buffer is sized to absorb a burst and no more, because audio sitting in the
+kernel is latency the jitter buffer can neither see nor trim.
+
+### 4.8 Forgetting a device must end its session
+
+Pairing state and session state are separate things, and "forget" has to
+act on both. Erasing only the stored key left the connection running on a
+key that had just been revoked: audio kept flowing, the laptop stayed in
+`Streaming` (so §2.3's pairing code never appeared), and the phone kept
+trying to resume a session it could no longer prove it owned. Neither side
+could recover without an app restart.
+
+Both sides now end the live session when the user forgets a device, and the
+peer is dropped through a fresh handshake — which, because §5's pairing
+flags are one-sided facts, correctly asks for a new code.
+
+Relatedly: **an explicit user action must preempt an automatic one.**
+`connectTo` declines to start while an attempt is in flight, so a Connect
+tap during an automatic retry did nothing at all, which the user
+experiences as the app looping on its own instead of asking for a code.
+
+### 4.9 The receiver must be able to resynchronise
+
+A jitter buffer that only ever discards "late" packets has a failure mode
+where it stops permanently: if the play position ever runs *past* the
+sender, every subsequent packet looks late, so the buffer stays empty and
+playback stays silent while the sender transmits normally. Nothing in the
+steady-state logic recovers from it.
+
+So `JitterBuffer` treats a wildly-diverged sequence position, or sustained
+starvation, as a signal to re-prebuffer from wherever the sender actually
+is. The cost is one brief gap; the alternative is silence until the user
+restarts the app.
+
+The corollary on the playback side: **anything that can make the playback
+loop spin without blocking is a correctness bug, not just a performance
+one**, because each iteration advances the expected sequence number. A
+failed `AudioTrack.write` returns immediately rather than pacing to real
+time, which is why `PlaybackTrack` checks the result, rebuilds a dead
+track, and backs off instead of retrying instantly.
+
 ## 5. Discovery & pairing
 
 - **Discovery:** mDNS/DNS-SD both directions — Windows advertises via the
@@ -215,6 +386,17 @@ over TCP (low-frequency, needs reliability, latency doesn't matter there).
   with ChaCha20-Poly1305.
 - After first pairing, both sides remember each other, so normal daily use
   is "open both apps, they reconnect automatically" — no code re-entry.
+- **"Remembering each other" is two independent, one-sided facts** — each
+  side's `paired_devices`/saved-key store, not a shared state. Forgetting a
+  device on one side (there's a "Forget" action in both apps' Settings)
+  doesn't tell the other side. The server's `HELLO_ACK.paired` flag is
+  therefore only ever a hint, not a guarantee the phone can actually
+  `REPAIR` — see `protocol-spec.md` §4/§5 and `android-app`'s handling in
+  `RelayService.connectTo`, which falls back to a fresh pairing code
+  whenever it doesn't actually have a usable local key, regardless of what
+  the laptop claims. Symmetrically, the laptop always keeps a pairing code
+  visible whenever nothing is actively streaming (§2.3 item 7), so this
+  case never requires restarting either app to recover from.
 
 ## 6. Latency budget (honest, not aspirational)
 

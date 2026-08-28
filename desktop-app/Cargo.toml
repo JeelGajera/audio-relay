@@ -11,6 +11,36 @@ publish = false
 name = "audio-relay"
 path = "src/main.rs"
 
+# Built by `cargo deb` (see .github/workflows/release.yml's build-linux job)
+# alongside the existing portable .tar.gz — an apt/dpkg-installable option
+# for people who'd rather have it on their PATH and in their package
+# manager than unpack a tarball. `depends = "$auto"` alone is enough:
+# cargo-deb's ldd-based detection already resolves the real runtime need —
+# `libpulse0` (which ships both `libpulse.so.0` and `libpulse-simple.so.0`
+# on Debian/Ubuntu) — verified by actually building this package rather
+# than assumed; see `capture::linux_impl`'s module doc for why only that
+# one package is needed.
+[package.metadata.deb]
+name = "audio-relay"
+maintainer = "audio-relay contributors <https://github.com/JeelGajera/audio-relay>"
+copyright = "2026, audio-relay contributors"
+license-file = ["../LICENSE", "0"]
+extended-description = """\
+Captures this machine's system audio (via PulseAudio, or PipeWire's \
+pipewire-pulse compatibility layer) and relays it over the local network \
+to the audio-relay Android app, which plays it back through whatever \
+Bluetooth device is already connected. See \
+https://github.com/JeelGajera/audio-relay for the Android app and full \
+documentation."""
+section = "sound"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/audio-relay", "usr/bin/", "755"],
+    ["../README.md", "usr/share/doc/audio-relay/README.md", "644"],
+    ["README.md", "usr/share/doc/audio-relay/README.desktop-app.md", "644"],
+]
+
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
 serde = { version = "1", features = ["derive"] }
@@ -41,6 +71,13 @@ windows = { version = "0.57", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_System_Registry",
+    # For "Also play locally while relaying" (capture/mod.rs's
+    # windows_impl::set_endpoint_mute): activates IAudioEndpointVolume on
+    # the selected render endpoint by ID, independent of the `wasapi` crate
+    # (whose `Device` type doesn't expose endpoint-volume control).
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
 ] }
 raw-window-handle = "0.6"
 

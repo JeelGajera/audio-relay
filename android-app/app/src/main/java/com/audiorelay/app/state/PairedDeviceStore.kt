@@ -41,10 +41,19 @@ class PairedDeviceStore(context: Context) {
         get() = prefs.getString(KEY_LAST_LAPTOP_ID, null)
 
     fun forgetLaptop(laptopDeviceId: String) {
-        prefs.edit()
+        val edit = prefs.edit()
             .remove(nameKey(laptopDeviceId))
             .remove(keyKey(laptopDeviceId))
-            .apply()
+        // Otherwise a forgotten laptop that happened to be the last one we
+        // connected to keeps being auto-reconnected to on every launch (see
+        // RelayService.startDiscoveryAndAutoConnect) even though we just
+        // told it to forget — the laptop still remembers *us* (forgetting
+        // is one-sided), so it reports `paired: true` and the phone would
+        // otherwise keep trying REPAIR with a key it no longer has.
+        if (prefs.getString(KEY_LAST_LAPTOP_ID, null) == laptopDeviceId) {
+            edit.remove(KEY_LAST_LAPTOP_ID)
+        }
+        edit.apply()
     }
 
     /** All currently paired laptops, as (device_id, name) — for the Settings screen's paired-device list. */

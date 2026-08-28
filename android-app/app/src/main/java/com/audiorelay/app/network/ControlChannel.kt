@@ -42,6 +42,18 @@ class ControlChannel(
 
     class ControlChannelException(message: String) : IOException(message)
 
+    /**
+     * The laptop *refused* our credentials, as opposed to the connection
+     * failing. Separate from [ControlChannelException] because the two need
+     * opposite handling and conflating them was a real defect: a rejected
+     * `REPAIR` looked like an ordinary network error, so the phone retried
+     * the same stored key on a backoff, forever, and never once offered to
+     * pair again. A refusal is permanent — the key is stale and no number
+     * of retries will change that — so it has to fall back to entering a
+     * code, not to waiting.
+     */
+    class PairingRejected(message: String) : IOException(message)
+
     /** Connects and exchanges HELLO/HELLO_ACK. Caller decides pair vs. repair from the result. */
     suspend fun connect(): ControlMessage.HelloAck = withContext(Dispatchers.IO) {
         val s = Socket()
@@ -73,7 +85,7 @@ class ControlChannel(
                     val sessionKey = Crypto.deriveSessionKey(code, deviceId, laptopDeviceId)
                     finishPairing(laptopDeviceId, laptopDeviceName, sessionKey, reply.session_id)
                 }
-                is ControlMessage.PairFail -> throw ControlChannelException("pairing failed: ${reply.reason}")
+                is ControlMessage.PairFail -> throw PairingRejected(reply.reason)
                 else -> throw ControlChannelException("unexpected message while pairing: $reply")
             }
         }
@@ -85,7 +97,7 @@ class ControlChannel(
             send(ControlMessage.Repair(deviceId, proof))
             when (val reply = readNextMessage()) {
                 is ControlMessage.PairOk -> finishPairing(laptopDeviceId, laptopDeviceName, savedKey, reply.session_id)
-                is ControlMessage.PairFail -> throw ControlChannelException("reconnect failed: ${reply.reason}")
+                is ControlMessage.PairFail -> throw PairingRejected(reply.reason)
                 else -> throw ControlChannelException("unexpected message while reconnecting: $reply")
             }
         }

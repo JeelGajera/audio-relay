@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 
 use crate::protocol::crypto;
-use crate::protocol::packet::{AudioPacket, Codec, SampleRate};
+use crate::protocol::packet::{self, AudioPacket, Codec, SampleRate};
 use crate::state::AppState;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,10 +32,18 @@ impl AudioSender {
         })
     }
 
-    /// Encrypts and sends one frame. A no-op (returns `Ok`) if there's no
-    /// active paired session yet — capture keeps running regardless of
-    /// pairing state, this is just where we decide whether to actually
-    /// transmit.
+    /// Encrypts and sends one captured chunk, split across as many packets
+    /// as it takes to keep every datagram within
+    /// [`packet::MAX_DATAGRAM_BYTES`] (see that constant for why
+    /// oversized datagrams are a reliability problem, not just a tidiness
+    /// one). Each resulting packet is independently sequenced and
+    /// encrypted, exactly as if it had been captured on its own — the
+    /// receiver cannot tell a split chunk from natively-small ones, so this
+    /// needs no protocol change.
+    ///
+    /// A no-op (returns `Ok`) if there's no active paired session yet —
+    /// capture keeps running regardless of pairing state, this is just
+    /// where we decide whether to actually transmit.
     pub async fn send_frame(
         &mut self,
         state: &Arc<AppState>,
@@ -52,6 +60,44 @@ impl AudioSender {
             return Ok(());
         };
 
+        let bytes_per_frame = (channels as usize).max(1) * 2; // 16-bit PCM
+        let max_payload = packet::max_payload_bytes(bytes_per_frame);
+        // Equal-sized packets, not "fill each one then a short remainder" —
+        // see `even_split_bytes` for why an uneven split destabilises the
+        // receiver's jitter buffer.
+        let per_packet = packet::even_split_bytes(pcm.len(), max_payload, bytes_per_frame);
+        let bytes_per_ms = (sample_rate.as_hz() as usize * bytes_per_frame) / 1000;
+
+        for (i, slice) in pcm.chunks(per_packet).enumerate() {
+            // Each sub-packet carries the capture time of *its own* audio,
+            // not the parent chunk's, so the receiver's drift measurement
+            // (which keys off forward progress of this timestamp) still
+            // sees a monotonic clock rather than a stutter of repeats.
+            let offset_ms = if bytes_per_ms == 0 {
+                0
+            } else {
+                (i * per_packet / bytes_per_ms) as u32
+            };
+            self.send_one(
+                &session,
+                sample_rate,
+                channels,
+                timestamp_ms.wrapping_add(offset_ms),
+                slice,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn send_one(
+        &mut self,
+        session: &crate::state::ActiveSession,
+        sample_rate: SampleRate,
+        channels: u8,
+        timestamp_ms: u32,
+        pcm: &[u8],
+    ) -> Result<(), SendError> {
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1);
 
@@ -77,9 +123,14 @@ impl AudioSender {
             payload: ciphertext,
             ..header_packet
         };
-        self.socket
-            .send_to(&packet.encode(), session.audio_addr)
-            .await?;
+        let encoded = packet.encode();
+        debug_assert!(
+            encoded.len() <= packet::MAX_DATAGRAM_BYTES,
+            "emitted a {}-byte datagram, over the {}-byte MTU budget",
+            encoded.len(),
+            packet::MAX_DATAGRAM_BYTES
+        );
+        self.socket.send_to(&encoded, session.audio_addr).await?;
         Ok(())
     }
 }
